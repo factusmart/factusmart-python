@@ -14,6 +14,11 @@ Uso::
         **calc,
     })
     print(r["aceptado_por_sunat"], r["serie_numero"])
+
+Webhooks::
+
+    if not factusmart.verificar_firma_webhook(cuerpo_crudo, headers["X-FactuSmart-Firma"], "whsec_..."):
+        ...  # responde 401
 """
 
 from . import errores
@@ -21,6 +26,7 @@ from ._version import __version__
 from .calculo import calcular_comprobante
 from .cliente import OPERACIONES, Cliente, Transporte, hora_peru
 from .errores import (
+    CodigoDeError,
     ErrorDeAutenticacion,
     ErrorDeValidacion,
     FactuSmartError,
@@ -29,6 +35,7 @@ from .errores import (
     RucNoAutorizado,
     SinCreditos,
 )
+from .webhooks import HEADER_FIRMA, verificar_firma_webhook
 
 __all__ = [
     "__version__",
@@ -37,6 +44,9 @@ __all__ = [
     "OPERACIONES",
     "calcular_comprobante",
     "hora_peru",
+    "verificar_firma_webhook",
+    "HEADER_FIRMA",
+    "CodigoDeError",
     "errores",
     "FactuSmartError",
     "ErrorDeAutenticacion",

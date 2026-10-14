@@ -4,7 +4,7 @@ Configuración por variables de entorno:
 
 - ``FACTUSMART_TEST_BASE_URL`` (por defecto ``https://factusmart.test/api/v1/issuer``)
 - ``FACTUSMART_TEST_API_KEY``  (por defecto ``test_apikey_demo_123``)
-- ``FACTUSMART_TEST_RUC``      (por defecto ``20000000000``; si no pertenece a la
+- ``FACTUSMART_TEST_RUC``      (por defecto ``20777666555``; si no pertenece a la
   cuenta se usa el primer RUC activo en modo demo de ``rucs.listar()``)
 - ``FACTUSMART_INTEGRACION=0`` para saltarlas.
 
@@ -20,7 +20,7 @@ from factusmart import errores
 
 BASE_URL = os.environ.get("FACTUSMART_TEST_BASE_URL", "https://factusmart.test/api/v1/issuer")
 API_KEY = os.environ.get("FACTUSMART_TEST_API_KEY", "test_apikey_demo_123")
-RUC = os.environ.get("FACTUSMART_TEST_RUC", "20000000000")
+RUC = os.environ.get("FACTUSMART_TEST_RUC", "20777666555")
 
 if "factusmart.pe" in BASE_URL:
     raise RuntimeError("Las pruebas de integración NO se corren contra producción.")
@@ -112,6 +112,8 @@ class TestIntegracion(unittest.TestCase):
             falso.ping()
         self.assertEqual(ctx.exception.status, 401)
         self.assertTrue(ctx.exception.mensaje)
+        self.assertEqual(ctx.exception.codigo, "NO_AUTENTICADO")
+        self.assertIs(ctx.exception.reintentable, False)
 
     def test_7_payload_invalido(self) -> None:
         datos = dict(_boleta(), serie_documento="ZZ99")
@@ -122,6 +124,20 @@ class TestIntegracion(unittest.TestCase):
         with self.assertRaises(errores.ErrorDeValidacion) as ctx:
             self.fs.comprobantes.listar({"limite": 500})
         self.assertIn("limite", ctx.exception.mensaje)
+        self.assertEqual(ctx.exception.codigo, "DATOS_INVALIDOS")
+        self.assertIs(ctx.exception.reintentable, False)
+        self.assertIn("limite", ctx.exception.campos)
+
+    def test_8_descarga_inexistente_es_404_json(self) -> None:
+        inexistente = str(uuid.uuid4())
+        with self.assertRaises(errores.NoEncontrado) as ctx:
+            self.fs.comprobantes.descargar(inexistente, "pdf")
+        e = ctx.exception
+        self.assertEqual(e.status, 404)
+        self.assertEqual(e.codigo, "NO_ENCONTRADO", e.respuesta)
+        self.assertIs(e.reintentable, False)
+        self.assertIsInstance(e.respuesta, dict)
+        self.assertEqual(e.mensaje, e.respuesta.get("message"))
 
 
 if __name__ == "__main__":

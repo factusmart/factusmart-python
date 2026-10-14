@@ -148,7 +148,15 @@ y heredan de `FactuSmartError`, que trae:
 
 - `status`: código HTTP (`None` si fue un error de red),
 - `mensaje`: el mensaje del API, en español,
-- `respuesta`: el cuerpo completo de la respuesta.
+- `respuesta`: el cuerpo completo de la respuesta,
+- `codigo`: identificador estable en MAYÚSCULAS (`"NO_ENCONTRADO"`,
+  `"SIN_CREDITOS"`…). **Decide tu lógica con `codigo`, no con `mensaje`** (el
+  texto puede cambiar de redacción). `None` si fue un error de red,
+- `reintentable`: `True` si repetir la misma petición más tarde puede
+  funcionar, `False` si hay que corregir algo antes. `None` si no hubo
+  respuesta o el servidor es de una versión anterior que no lo envía,
+- `campos`: en errores de validación (422), `{"campo": ["mensaje", ...]}`;
+  `{}` si no hay detalle por campo.
 
 | HTTP | Excepción |
 |---|---|
@@ -160,6 +168,24 @@ y heredan de `FactuSmartError`, que trae:
 | 429 | `LimiteDePeticiones` (con `segundos_de_espera` si se pudo leer) |
 | otros / red | `FactuSmartError` |
 
+Códigos más comunes (lista completa en la documentación del API y en
+`factusmart.CodigoDeError`):
+
+| `codigo` | HTTP | `reintentable` | Qué hacer |
+|---|---|---|---|
+| `NO_AUTENTICADO` | 401 | no | Revisa la API key |
+| `PLAN_VENCIDO` / `SIN_CREDITOS` | 402 | no | Renueva el plan o recarga créditos |
+| `RUC_NO_AUTORIZADO` / `RUC_DESACTIVADO` | 403 | no | Revisa el RUC emisor |
+| `NO_ENCONTRADO` | 404 | no | El comprobante/guía/archivo no existe |
+| `EMISION_EN_CURSO` | 409 | sí | Reintenta con la misma `Idempotency-Key` |
+| `DATOS_INVALIDOS` | 422 | no | Corrige los datos (detalle en `campos`) |
+| `SUNAT_NO_DISPONIBLE` | 422 / 5xx | sí | Reintenta más tarde |
+| `LIMITE_PETICIONES` | 429 | sí | Espera `segundos_de_espera` |
+| `ERROR_INTERNO` | 5xx | sí | Reintenta; si persiste, contacta soporte |
+
+Un `codigo` desconocido trátalo como no reintentable salvo que `reintentable`
+diga lo contrario.
+
 ```python
 from factusmart import errores
 
@@ -167,10 +193,14 @@ try:
     r = fs.comprobantes.emitir(datos)
 except errores.ErrorDeValidacion as e:
     print("Datos inválidos:", e.mensaje)   # no se cobró el crédito
+    for campo, mensajes in e.campos.items():
+        print(" -", campo, mensajes)
 except errores.SinCreditos:
     print("Recarga créditos")
 except errores.FactuSmartError as e:
-    print("Error", e.status, e.mensaje)
+    if e.codigo == factusmart.CodigoDeError.SUNAT_NO_DISPONIBLE:
+        print("SUNAT caída, intenta más tarde")
+    print("Error", e.status, e.codigo, e.mensaje, "reintentable:", e.reintentable)
 ```
 
 ## Reintentos e idempotencia
@@ -180,7 +210,9 @@ except errores.FactuSmartError as e:
   se usa en todos los reintentos de esa llamada**, así un reintento nunca emite
   dos veces ni cobra dos veces. Si llamas dos veces con la misma clave,
   recibes la misma respuesta.
-- Se reintenta solo ante: error de red/timeout, HTTP 429, 502, 503 y 504, con
+- Se reintenta solo ante: error de red/timeout, HTTP 429, 502, 503, 504 o una
+  respuesta de error con `"reintentable": true` (p. ej. `ERROR_INTERNO`,
+  `SUNAT_NO_DISPONIBLE`), con
   espera creciente (1 s, 2 s, 4 s…), hasta `max_reintentos` veces. Ante un
   límite de peticiones se respeta el header `Retry-After` o el "Espera N
   segundos" del mensaje.
@@ -189,7 +221,40 @@ except errores.FactuSmartError as e:
 - Se reintentan las consultas (GET) y `rucs.crear` (el API es idempotente por
   RUC).
 - **Nunca** se reintentan solas: `anulaciones.crear`, `guias.emitir`,
-  `comprobantes.reenviar`, `comprobantes.consultar_sunat` y `rucs.activar`.
+  `comprobantes.reenviar`, `comprobantes.consultar_sunat` y `rucs.activar`,
+  **aunque** la respuesta diga `"reintentable": true`. Ahí decides tú (mira
+  `e.reintentable`).
+
+## Verificar webhooks
+
+FactuSmart puede avisarte con un POST a tu servidor cuando un comprobante pasa
+a aceptado, observado, rechazado o anulado (se configura en tu portal de
+integrador, pestaña Webhooks, donde obtienes el secreto `whsec_…`). Cada aviso
+trae el header `X-FactuSmart-Firma`; verifícalo antes de confiar en el aviso:
+
+```python
+import factusmart
+from flask import Flask, request
+
+app = Flask(__name__)
+SECRETO = "whsec_..."  # de tu portal; mejor en una variable de entorno
+
+@app.post("/webhooks/factusmart")
+def webhook_factusmart():
+    cuerpo_crudo = request.get_data()  # bytes TAL CUAL llegaron
+    firma = request.headers.get("X-FactuSmart-Firma", "")
+    if not factusmart.verificar_firma_webhook(cuerpo_crudo, firma, SECRETO):
+        return "firma inválida", 401
+    aviso = request.get_json()
+    # guarda aviso["id"] para no procesar dos veces el mismo aviso
+    return "", 200
+```
+
+**Usa el cuerpo CRUDO.** Si haces `json.dumps(request.get_json())` los bytes
+cambian (espacios, orden, tildes) y la firma no coincide. La función nunca
+lanza excepción: con datos vacíos, `None` o una firma mal formada devuelve
+`False`. Responde `2xx` en menos de 8 segundos (si el proceso es largo, hazlo
+después).
 
 ## Pruebas (para quien mantiene el SDK)
 
@@ -202,7 +267,7 @@ python -m unittest discover -s tests -v
   si algún `operationId` no tiene método en el SDK.
 - `test_integracion.py` va contra el API **local** (`FACTUSMART_TEST_BASE_URL`,
   `FACTUSMART_TEST_API_KEY`, `FACTUSMART_TEST_RUC`; `FACTUSMART_INTEGRACION=0`
-  para saltarlas). Gasta 2 créditos por corrida. Se niega a correr contra
+  para saltarlas). Por defecto usa el RUC `20777666555`. Gasta 2 créditos por corrida. Se niega a correr contra
   `factusmart.pe`.
 
 ## Licencia

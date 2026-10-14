@@ -7,13 +7,19 @@ info:
   contact:
     name: FactuSmart
     url: https://factusmart.pe/api-facturacion-electronica/docs
+  license:
+    # API propietaria (no es software libre). No hay licencia SPDX publicada que aplique:
+    # `LicenseRef-*` es la forma SPDX de nombrar una licencia propia no listada.
+    name: Propietario — uso sujeto a los términos de servicio de FactuSmart
+    identifier: LicenseRef-FactuSmart-Propietario
   description: |
     API REST para que sistemas de terceros emitan **facturas, boletas, notas de crédito/débito,
     guías de remisión (GRE 2.0) y comunicaciones de baja** ante SUNAT, y descarguen el PDF, el XML
     firmado y el CDR. Tú envías la venta en JSON; FactuSmart arma el XML UBL 2.1, lo firma y lo envía.
 
     Todas las respuestas son **JSON** (`Content-Type: application/json`), salvo las descargas de
-    archivos (`/documents/{external_id}/{type}`), que devuelven el archivo o una página HTML 404.
+    archivos (`/documents/{external_id}/{type}`), que devuelven el archivo (y un error JSON `404` si
+    el comprobante o el archivo no existen).
 
     ## Autenticación
 
@@ -40,6 +46,10 @@ info:
     cuenta → `403`. Un RUC desactivado → `403`. Los endpoints `/rucs*` nunca resuelven RUC (gestionan
     la cuenta).
 
+    Cada cuenta empieza con un tope de **50 RUCs** (freno de seguridad, no límite comercial). Lo
+    amplías tú mismo de 50 en 50 desde tu portal de integrador: **Empresas → Ampliar límite (+50)**.
+    Ver `POST /rucs`.
+
     ## Créditos
 
     Todo es prepago. Cuesta **1 crédito**: cada comprobante emitido (`POST /documents`), cada guía
@@ -64,6 +74,22 @@ info:
     petición aún se procesa → `409`. Si la emisión falló (`402`/`422`), la key se libera y puedes
     reintentar con ella. Solo existe en `POST /documents`.
 
+    ## Webhooks (avisos de cambio de estado)
+
+    En vez de consultar `GET /documents/{external_id}` cada cierto tiempo, puedes recibir un **POST
+    firmado** en tu servidor cuando un comprobante **emitido por el API** pasa a aceptado (`05`),
+    observado (`07`), rechazado (`09`) o anulado (`11`). Se configura **una URL por cuenta** (recibes
+    los avisos de todos tus RUCs) en tu portal de integrador, pestaña **Webhooks**; ahí obtienes el
+    secreto `whsec_…` y puedes enviar un aviso de prueba. No hay endpoint del API para configurarlo.
+
+    - Firma: header `X-FactuSmart-Firma` = HMAC-SHA256 (hex) del **cuerpo crudo** con tu secreto.
+      Los SDK traen `verificarFirmaWebhook` / `verificar_firma_webhook`.
+    - Responde `2xx` en menos de **8 segundos**. Si no, se reintenta: 6 intentos en total
+      (inmediato, +1 min, +5 min, +30 min, +2 h, +6 h). No se siguen redirecciones.
+    - El `id` del aviso es el mismo en todos los reintentos: úsalo para no procesarlo dos veces.
+
+    El detalle del payload y los headers está en la sección `webhooks` (`comprobanteEstado`).
+
     ## HTTP 200 no significa "aceptado por SUNAT"
 
     En emisión y consultas revisa siempre `aceptado_por_sunat` y `estado`
@@ -76,18 +102,61 @@ info:
     - Además, el grupo de rutas `api` aplica `60` peticiones/minuto **por IP** antes de autenticar.
 
     Al superar cualquiera de los dos límites la respuesta es **HTTP 429** con el header `Retry-After`
-    (segundos) y `{"success": false, "message": "Demasiadas peticiones. Espera N segundos e intenta de nuevo.", "retry_after": N}`.
+    (segundos) y `{"success": false, "message": "Demasiadas peticiones. Espera N segundos e intenta de nuevo.", "retry_after": N, "codigo": "LIMITE_PETICIONES", "reintentable": true}`.
     Espera esos segundos y reintenta.
 
-    ## Errores de validación
+    ## Errores
+
+    Toda respuesta de error (HTTP `4xx`/`5xx`) tiene la misma forma base (schema `Error`):
+
+    ```json
+    {"success": false, "message": "Comprobante no encontrado.", "codigo": "NO_ENCONTRADO", "reintentable": false}
+    ```
+
+    - `message`: texto en español para mostrar o registrar. **No lo compares**: puede cambiar de redacción.
+    - `codigo`: identificador estable en MAYÚSCULAS. Decide tu lógica con este campo.
+    - `reintentable`: `true` si repetir **la misma petición** más tarde puede funcionar (límite de
+      peticiones, emisión en curso, SUNAT caída, error interno). `false` = hay que corregir algo antes.
+    - Algunos errores agregan campos propios (`creditos_restantes`, `retry_after`, `campos`, o el
+      estado del comprobante en `/reenviar`).
+
+    | `codigo` | HTTP | `reintentable` | Significado |
+    |---|---|---|---|
+    | `NO_AUTENTICADO` | 401 | no | Falta la API key, es inválida o la cuenta está desactivada. |
+    | `PLAN_VENCIDO` | 402 | no | El plan de la cuenta venció. Solo quedan abiertos `/ping`, `/account` y `/rucs*`. |
+    | `SIN_CREDITOS` | 402 | no | Sin créditos. No se emitió ni envió nada. Trae `creditos_restantes: 0`. |
+    | `RUC_NO_AUTORIZADO` | 403 | no | El RUC indicado no pertenece a la cuenta o no existe. |
+    | `RUC_DESACTIVADO` | 403 | no | El RUC está desactivado (`PATCH /rucs/{ruc}/activation`). |
+    | `SIN_PERMISO` | 403 | no | Acción no permitida. |
+    | `NO_ENCONTRADO` | 404 | no | No existe el comprobante/guía/anulación, o el archivo a descargar (PDF/XML/CDR). |
+    | `RUTA_NO_ENCONTRADA` | 404 | no | La URL no existe (revisa la ruta y la URL base). |
+    | `METODO_NO_PERMITIDO` | 405 | no | Método HTTP incorrecto para esa ruta. |
+    | `EMISION_EN_CURSO` | 409 | **sí** | Ya hay una emisión en curso con esa `Idempotency-Key`. Reintenta en unos segundos. |
+    | `CONFLICTO` | 409 | no | Conflicto con el estado actual (ej. el RUC ya está registrado con otra cuenta). |
+    | `DATOS_INVALIDOS` | 422 | no | El payload o los parámetros no pasan la validación. Si hay detalle por campo, viene en `campos`. |
+    | `RUC_REQUERIDO` | 422 | no | La cuenta tiene varios RUCs y no indicaste cuál (`ruc`). |
+    | `RUC_SIN_TENANT` | 422 | no | El RUC no tiene una empresa (tenant) asociada. Contacta soporte. |
+    | `CERTIFICADO_NO_CONFIGURADO` | 422 | no | El RUC no tiene certificado digital (ni envío por PSE). |
+    | `ERROR_EMISION` | 422 | no | El motor no pudo generar el comprobante/guía/anulación. Revisa `message`. Crédito devuelto. |
+    | `RECHAZADO_SUNAT` | 422 | no | `/reenviar`: SUNAT rechazó el comprobante (estado `09`). Corrige y emite uno nuevo. |
+    | `REENVIO_FALLIDO` | 422 | no | `/reenviar`: el reintento no se completó por otro motivo. Revisa `message`. |
+    | `SUNAT_NO_DISPONIBLE` | 422 / 5xx | **sí** | SUNAT (o la red hacia SUNAT/PSE) no respondió. Reintenta más tarde. |
+    | `LIMITE_PETICIONES` | 429 | **sí** | Demasiadas peticiones. Espera `Retry-After` segundos. |
+    | `ERROR_INTERNO` | 5xx | **sí** | Error interno del servidor. Reintenta; si persiste, contacta soporte. |
+
+    La lista puede crecer: trata un `codigo` desconocido como no reintentable salvo que
+    `reintentable` diga lo contrario.
+
+    ### Errores de validación
 
     - Los errores del payload de emisión (`/documents`, `/anulaciones`, `/guias`) devuelven
-      `422 {"success": false, "message": "Datos del comprobante inválidos o incompletos. ... (detalle)"}`.
-    - Los endpoints con validación Laravel (`GET /documents`, `POST /rucs`, `PATCH /rucs/{ruc}/activation`)
-      devuelven `422` con dos formas posibles según el header `Accept`:
-      con `Accept: application/json` → mapa crudo `{"campo": ["mensaje"]}`;
-      sin él → `{"success": false, "message": {"campo": ["mensaje"]}, "file": ..., "line": ...}`.
-      **Envía siempre `Accept: application/json`.**
+      `422` con `codigo: DATOS_INVALIDOS` y el detalle en `message`.
+    - Los endpoints con validación por campo (`GET /documents`, `POST /rucs`, `PATCH /rucs/{ruc}/activation`)
+      devuelven `422` con `codigo: DATOS_INVALIDOS` y el mapa `{"campo": ["mensaje"]}` en `campos`.
+      Por compatibilidad con integraciones existentes, ese mismo mapa sigue apareciendo donde
+      aparecía antes: en la raíz del JSON si envías `Accept: application/json`, o dentro de `message`
+      si no lo envías. Usa `campos`, que es igual en ambos casos.
+      Nunca se exponen rutas de archivos ni líneas de código del servidor.
     - La API **ignora en silencio** los campos con nombre mal escrito.
 
 servers:
@@ -119,6 +188,8 @@ tags:
     description: Comunicación de baja (asíncrona, con ticket).
   - name: Guías de remisión
     description: Guías de remisión electrónica GRE 2.0 (asíncronas).
+  - name: Webhooks
+    description: Avisos que FactuSmart envía a tu servidor cuando cambia el estado de un comprobante.
 
 paths:
   /ping:
@@ -189,8 +260,10 @@ paths:
       description: |
         Series configuradas en el establecimiento principal del RUC (el del usuario admin), con el
         siguiente número estimado. FactuSmart no usa F001/B001: cada RUC nace con series propias
-        (FA01, BA01, FN01, ...). `siguiente_numero` se calcula sobre la tabla de comprobantes, así que
-        para series de guía (09/31) siempre muestra 1. Requiere RUC.
+        (FA01, BA01, FN01, TA01, ...). `siguiente_numero` es el último número emitido en esa serie + 1,
+        contado sobre lo que corresponde a cada tipo (comprobantes 01/03/07/08, guías 09/31, etc.).
+        Es una estimación: si otro proceso emite entre la consulta y tu envío, el número real será
+        mayor (usa `numero_documento: "#"` para que el sistema asigne el correlativo). Requiere RUC.
       parameters:
         - $ref: '#/components/parameters/RucQuery'
         - $ref: '#/components/parameters/XRucHeader'
@@ -471,6 +544,8 @@ paths:
               example:
                 success: false
                 message: Ya hay una emisión en curso con esa Idempotency-Key. Reintenta en unos segundos.
+                codigo: EMISION_EN_CURSO
+                reintentable: true
         '422':
           description: |
             Falta el RUC (cuenta con varios), el RUC no tiene tenant, payload inválido
@@ -485,10 +560,14 @@ paths:
                   value:
                     success: false
                     message: "Datos del comprobante inválidos o incompletos. Revisa el formato del JSON. (La serie ingresada FA09, es incorrecta.)"
+                    codigo: DATOS_INVALIDOS
+                    reintentable: false
                 rucRequerido:
                   value:
                     success: false
                     message: Indica el RUC emisor en el campo "ruc" (tu cuenta tiene varios RUCs enlazados).
+                    codigo: RUC_REQUERIDO
+                    reintentable: false
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -549,8 +628,7 @@ paths:
               schema:
                 anyOf:
                   - $ref: '#/components/schemas/Error'
-                  - $ref: '#/components/schemas/ValidationErrorMap'
-                  - $ref: '#/components/schemas/ErrorWithDebug'
+                  - $ref: '#/components/schemas/ValidationError'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -597,7 +675,8 @@ paths:
         Descarga el PDF (formato A4, se regenera en cada descarga), el XML firmado o el CDR (ZIP de
         SUNAT) del comprobante. No consume crédito. El PDF y el XML existen desde que el comprobante
         se genera (incluso en estado `01`); el CDR solo cuando SUNAT respondió.
-        Si el comprobante, el PDF o el CDR no existen, responde **404 con una página HTML** (no JSON).
+        Si el comprobante o el archivo (PDF, XML o CDR) no existen, responde `404` JSON con
+        `codigo: NO_ENCONTRADO` (si falta el CDR, consulta a SUNAT con `/consultar-sunat` y reintenta).
       parameters:
         - $ref: '#/components/parameters/ExternalId'
         - name: type
@@ -624,10 +703,16 @@ paths:
         '403':
           $ref: '#/components/responses/RucForbidden'
         '404':
-          description: Comprobante no encontrado, o PDF/CDR inexistente en el servidor. Página HTML explicativa.
+          description: Comprobante no encontrado, o PDF/XML/CDR inexistente en el servidor.
           content:
-            text/html:
-              schema: { type: string }
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                comprobante:
+                  value: { success: false, message: 'Comprobante no encontrado.', codigo: NO_ENCONTRADO, reintentable: false }
+                cdr:
+                  value: { success: false, message: 'El CDR de este comprobante no está disponible todavía. Consulta a SUNAT con POST /documents/{external_id}/consultar-sunat y vuelve a intentar.', codigo: NO_ENCONTRADO, reintentable: false }
         '422':
           $ref: '#/components/responses/RucRequired'
         '429':
@@ -644,7 +729,8 @@ paths:
         Reintenta el envío del mismo comprobante (sin crear uno nuevo ni gastar correlativo). Pensado para
         estados `01` y `09`. No consume crédito. `success: true` significa que el reintento se ejecutó;
         revisa `aceptado_por_sunat`. Si el reintento falla responde `422` **con el mismo cuerpo**
-        (`success: false`, `mensaje`, `estado`...), no con el formato de error genérico.
+        (`success: false`, `mensaje`, `estado`...) más los campos de error comunes `message`, `codigo`
+        (`RECHAZADO_SUNAT`, `SUNAT_NO_DISPONIBLE` o `REENVIO_FALLIDO`) y `reintentable`.
       parameters:
         - $ref: '#/components/parameters/ExternalId'
         - $ref: '#/components/parameters/XRucHeader'
@@ -669,7 +755,7 @@ paths:
         '404':
           $ref: '#/components/responses/DocumentNotFound'
         '422':
-          description: Falta el RUC (formato `Error`) o el reintento falló (formato `ResendResponse` con `success:false`).
+          description: Falta el RUC (formato `Error`) o el reintento falló (formato `ResendResponse` con `success:false`, más `message`, `codigo` y `reintentable`).
           content:
             application/json:
               schema:
@@ -843,7 +929,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example: { success: false, message: 'Anulación no encontrada para ese ticket.' }
+              example: { success: false, message: 'Anulación no encontrada para ese ticket.', codigo: NO_ENCONTRADO, reintentable: false }
         '422':
           description: Falta el RUC o la consulta a SUNAT falló.
           content:
@@ -971,7 +1057,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example: { success: false, message: 'Guía no encontrada.' }
+              example: { success: false, message: 'Guía no encontrada.', codigo: NO_ENCONTRADO, reintentable: false }
         '422':
           description: Falta el RUC o la consulta a SUNAT falló.
           content:
@@ -1009,7 +1095,13 @@ paths:
       description: |
         Da de alta un RUC nuevo enlazado a la cuenta (nace en modo prueba/demo). Idempotente: si el RUC
         ya pertenece a esta cuenta devuelve `200` con `ya_existia: true`. Si pertenece a otra cuenta →
-        `409`. Tope de autoservicio por cuenta (por defecto 50 RUCs) → `422`. No consume crédito.
+        `409`. No consume crédito.
+
+        **Tope de RUCs (ampliable).** Cada cuenta empieza con un tope de **50 RUCs**. Es solo un freno
+        de seguridad (que un error en tu sistema no cree empresas en masa), no un límite comercial.
+        Al alcanzarlo, esta llamada responde `422` (`codigo: DATOS_INVALIDOS`) con el mensaje
+        "Alcanzaste el máximo de N RUCs…". Lo amplías tú mismo, sin costo, de 50 en 50 desde tu portal
+        de integrador: **Empresas → Ampliar límite (+50)**.
       requestBody:
         required: true
         content:
@@ -1042,7 +1134,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example: { success: false, message: 'Ese RUC ya está registrado en el sistema (con otra cuenta).' }
+              example: { success: false, message: 'Ese RUC ya está registrado en el sistema (con otra cuenta).', codigo: CONFLICTO, reintentable: false }
         '422':
           description: Validación fallida, tope de RUCs alcanzado o error al crear el tenant.
           content:
@@ -1050,16 +1142,17 @@ paths:
               schema:
                 anyOf:
                   - $ref: '#/components/schemas/Error'
-                  - $ref: '#/components/schemas/ValidationErrorMap'
-                  - $ref: '#/components/schemas/ErrorWithDebug'
+                  - $ref: '#/components/schemas/ValidationError'
+              examples:
+                topeAlcanzado:
+                  summary: Tope de RUCs alcanzado (amplíalo desde el portal)
+                  value: { success: false, message: 'Alcanzaste el máximo de 50 RUCs. Amplíalo tú mismo desde tu portal de integrador (Empresas → Ampliar límite).', codigo: DATOS_INVALIDOS, reintentable: false }
         '500':
-          description: Plan de integradores no configurado en el servidor, límite de peticiones o error interno.
+          description: Plan de integradores no configurado en el servidor o error interno.
           content:
             application/json:
               schema:
-                anyOf:
-                  - $ref: '#/components/schemas/Error'
-                  - $ref: '#/components/schemas/ErrorWithDebug'
+                $ref: '#/components/schemas/Error'
 
   /rucs/{ruc}/activation:
     patch:
@@ -1098,13 +1191,97 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example: { success: false, message: 'Ese RUC no pertenece a esta cuenta o no existe.' }
+              example: { success: false, message: 'Ese RUC no pertenece a esta cuenta o no existe.', codigo: NO_ENCONTRADO, reintentable: false }
         '422':
           $ref: '#/components/responses/LaravelValidation'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/ServerErrorOrRateLimit'
+
+webhooks:
+  comprobanteEstado:
+    post:
+      operationId: webhookComprobanteEstado
+      tags: [Webhooks]
+      summary: Aviso de cambio de estado de un comprobante
+      description: |
+        **FactuSmart llama a TU servidor** (no es un endpoint que tú llames). Se envía cuando un
+        comprobante **emitido por el API** pasa a `05` Aceptado (`comprobante.aceptado`), `07` Observado
+        (`comprobante.observado`), `09` Rechazado (`comprobante.rechazado`) u `11` Anulado
+        (`comprobante.anulado`). El botón **Enviar prueba** del portal manda el evento `prueba`
+        (un solo intento, sin reintentos). Los comprobantes emitidos desde el panel web no generan aviso.
+
+        **Configuración:** solo desde el portal del integrador, pestaña **Webhooks**: una URL por cuenta
+        (recibes los avisos de todos tus RUCs), debe ser `https://` y pública (no se aceptan `localhost`,
+        IPs privadas ni de metadatos de nube). Al guardarla se genera un secreto `whsec_…`, que puedes
+        regenerar cuando quieras. Para desactivarlo, deja la URL vacía y guarda.
+
+        **Verificar la firma:** `X-FactuSmart-Firma` es el HMAC-SHA256 en hexadecimal del **cuerpo crudo**
+        (tal cual llega, sin volver a serializarlo) usando tu secreto. Compáralo en tiempo constante; si no
+        coincide, responde `401` e ignora el aviso. Con los SDK:
+
+        - Node: `FactuSmart.verificarFirmaWebhook(cuerpoCrudo, firma, secreto)` → `boolean`
+        - PHP: `\FactuSmart\Cliente::verificarFirmaWebhook($cuerpoCrudo, $firma, $secreto)` → `bool`
+        - Python: `factusmart.verificar_firma_webhook(cuerpo_crudo, firma, secreto)` → `bool`
+
+        **Reintentos:** si tu servidor no responde `2xx` en **8 segundos** (error, timeout, conexión
+        rechazada o una redirección `301`/`302`, que no se sigue), se reintenta con espera creciente:
+        **6 intentos en total** — inmediato, +1 min, +5 min, +30 min, +2 h y +6 h. Si fallan todos, el
+        aviso queda como **Error** en el portal (**Webhooks → Últimas entregas**, 50 más recientes, 30
+        días de historial) y puedes seguir consultando `GET /documents/{external_id}`. El `id` es el
+        mismo en todos los reintentos: guárdalo para no procesar dos veces el mismo aviso. Si el proceso
+        es largo, responde `200` de inmediato y procésalo después. El envío no retrasa la emisión.
+      security: []
+      parameters:
+        - name: X-FactuSmart-Evento
+          in: header
+          required: true
+          description: Tipo de evento (igual que `evento` del cuerpo).
+          schema: { $ref: '#/components/schemas/WebhookEvento' }
+        - name: X-FactuSmart-Id
+          in: header
+          required: true
+          description: Identificador único del aviso (igual que `id` del cuerpo). No cambia entre reintentos.
+          schema: { type: string, format: uuid }
+        - name: X-FactuSmart-Intento
+          in: header
+          required: true
+          description: Número de intento, de `1` a `6`.
+          schema: { type: string, examples: ['1'] }
+        - name: X-FactuSmart-Firma
+          in: header
+          required: true
+          description: HMAC-SHA256 en hexadecimal del cuerpo crudo, con tu secreto `whsec_…`.
+          schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+        - name: User-Agent
+          in: header
+          required: true
+          schema: { type: string, const: FactuSmart-Webhooks/1.0 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookComprobante'
+            example:
+              id: 0fbb616d-ec40-4bbd-a89f-591d9d404630
+              evento: comprobante.aceptado
+              ruc: "20777666555"
+              external_id: ad4d29e9-7510-4efd-963e-3f8b6fa2facd
+              serie_numero: BA01-35
+              tipo_documento: "03"
+              estado: "05"
+              estado_descripcion: Aceptado
+              aceptado_por_sunat: true
+              entorno: prueba
+              sunat: { codigo: "0", descripcion: "La Boleta numero BA01-35, ha sido aceptada" }
+              fecha: "2026-10-14T15:29:43-05:00"
+      responses:
+        '200':
+          description: |
+            Aviso recibido. Cualquier `2xx` cuenta como entregado; el cuerpo de tu respuesta se ignora.
+            Cualquier otro código (o no responder en 8 s) programa un reintento.
 
 components:
   securitySchemes:
@@ -1153,9 +1330,9 @@ components:
             $ref: '#/components/schemas/Error'
           examples:
             sinKey:
-              value: { success: false, message: 'API key requerida. Envíala en el header X-API-Key.' }
+              value: { success: false, message: 'API key requerida. Envíala en el header X-API-Key.', codigo: NO_AUTENTICADO, reintentable: false }
             invalida:
-              value: { success: false, message: 'API key inválida o cuenta desactivada.' }
+              value: { success: false, message: 'API key inválida o cuenta desactivada.', codigo: NO_AUTENTICADO, reintentable: false }
     RucForbidden:
       description: El RUC indicado no pertenece a la cuenta, o el RUC está desactivado.
       content:
@@ -1164,30 +1341,30 @@ components:
             $ref: '#/components/schemas/Error'
           examples:
             ajeno:
-              value: { success: false, message: 'El RUC indicado no pertenece a esta cuenta o no existe.' }
+              value: { success: false, message: 'El RUC indicado no pertenece a esta cuenta o no existe.', codigo: RUC_NO_AUTORIZADO, reintentable: false }
             desactivado:
-              value: { success: false, message: "Este RUC está desactivado. Reactívalo con PATCH /rucs/{ruc}/activation antes de continuar." }
+              value: { success: false, message: "Este RUC está desactivado. Reactívalo con PATCH /rucs/{ruc}/activation antes de continuar.", codigo: RUC_DESACTIVADO, reintentable: false }
     RucWithoutTenant:
       description: El RUC resuelto no tiene tenant asociado.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-          example: { success: false, message: 'El RUC no tiene un tenant asociado.' }
+          example: { success: false, message: 'El RUC no tiene un tenant asociado.', codigo: RUC_SIN_TENANT, reintentable: false }
     RucRequired:
       description: No se pudo determinar el RUC emisor (cuenta con varios RUCs y no se indicó), o el RUC no tiene tenant.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-          example: { success: false, message: 'Indica el RUC emisor en el campo "ruc".' }
+          example: { success: false, message: 'Indica el RUC emisor en el campo "ruc".', codigo: RUC_REQUERIDO, reintentable: false }
     DocumentNotFound:
       description: No existe un comprobante con ese `external_id` en el RUC.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-          example: { success: false, message: 'Comprobante no encontrado.' }
+          example: { success: false, message: 'Comprobante no encontrado.', codigo: NO_ENCONTRADO, reintentable: false }
     NoCredits:
       description: Sin créditos disponibles. No se emitió ni envió nada.
       content:
@@ -1197,18 +1374,25 @@ components:
           example:
             success: false
             message: Sin créditos disponibles en la cuenta. Recargue para seguir emitiendo.
+            codigo: SIN_CREDITOS
+            reintentable: false
             creditos_restantes: 0
     LaravelValidation:
       description: |
-        Validación fallida. Con `Accept: application/json` el cuerpo es el mapa crudo de errores; sin ese
-        header, un objeto `ErrorWithDebug` con el mapa dentro de `message`.
+        Validación por campo fallida (`codigo: DATOS_INVALIDOS`). El detalle está en `campos`. Por
+        compatibilidad, el mismo mapa también va en la raíz (con `Accept: application/json`) o dentro de
+        `message` (sin ese header).
       content:
         application/json:
           schema:
-            anyOf:
-              - $ref: '#/components/schemas/ValidationErrorMap'
-              - $ref: '#/components/schemas/ErrorWithDebug'
-          example: { activo: [El campo activo es obligatorio.] }
+            $ref: '#/components/schemas/ValidationError'
+          example:
+            activo: [El campo activo es obligatorio.]
+            success: false
+            message: 'Datos inválidos: El campo activo es obligatorio.'
+            campos: { activo: [El campo activo es obligatorio.] }
+            codigo: DATOS_INVALIDOS
+            reintentable: false
     RateLimited:
       description: |
         Límite de peticiones superado (120/min por API key, 60/min por IP). Espera los segundos
@@ -1220,37 +1404,74 @@ components:
       content:
         application/json:
           schema:
-            type: object
-            properties:
-              success: { type: boolean, example: false }
-              message: { type: string }
-              retry_after: { type: integer }
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                properties:
+                  retry_after: { type: integer }
           example:
             success: false
             message: Demasiadas peticiones. Espera 40 segundos e intenta de nuevo.
             retry_after: 40
+            codigo: LIMITE_PETICIONES
+            reintentable: true
     ServerErrorOrRateLimit:
       description: |
-        Error interno del servidor. Los errores técnicos (SQL, PHP) se devuelven sin `file`/`line`.
+        Error interno del servidor (`codigo: ERROR_INTERNO`, reintentable). Los errores técnicos (SQL, PHP)
+        se devuelven con un mensaje genérico, nunca con rutas de archivos ni líneas de código.
       content:
         application/json:
           schema:
-            anyOf:
-              - $ref: '#/components/schemas/ErrorWithDebug'
-              - $ref: '#/components/schemas/Error'
+            $ref: '#/components/schemas/Error'
           example:
             success: false
-            message: Error interno del servidor.
+            message: Ocurrió un error interno. Intenta de nuevo en unos segundos.
+            codigo: ERROR_INTERNO
+            reintentable: true
 
   schemas:
     # ───────────── Errores ─────────────
+    CodigoError:
+      type: string
+      description: |
+        Código estable del error (ver la tabla "Errores" de la descripción general). La lista puede
+        crecer en el futuro: trata un código desconocido según `reintentable`.
+      examples: [NO_ENCONTRADO]
+      enum:
+        - NO_AUTENTICADO
+        - PLAN_VENCIDO
+        - SIN_CREDITOS
+        - RUC_NO_AUTORIZADO
+        - RUC_DESACTIVADO
+        - SIN_PERMISO
+        - NO_ENCONTRADO
+        - RUTA_NO_ENCONTRADA
+        - METODO_NO_PERMITIDO
+        - EMISION_EN_CURSO
+        - CONFLICTO
+        - DATOS_INVALIDOS
+        - RUC_REQUERIDO
+        - RUC_SIN_TENANT
+        - CERTIFICADO_NO_CONFIGURADO
+        - ERROR_EMISION
+        - RECHAZADO_SUNAT
+        - REENVIO_FALLIDO
+        - SUNAT_NO_DISPONIBLE
+        - LIMITE_PETICIONES
+        - ERROR_INTERNO
     Error:
       type: object
-      description: Forma de error usada por los controladores y el middleware de la API.
-      required: [success, message]
+      description: |
+        Forma de TODA respuesta de error del API. `success` y `message` se mantienen por compatibilidad;
+        decide tu lógica con `codigo` y `reintentable`. Algunos endpoints agregan campos propios.
+      required: [success, message, codigo, reintentable]
       properties:
         success: { type: boolean, const: false }
-        message: { type: string, description: 'Mensaje legible en español.' }
+        message: { type: string, description: 'Mensaje legible en español. Puede cambiar de redacción: no lo compares.' }
+        codigo: { $ref: '#/components/schemas/CodigoError' }
+        reintentable:
+          type: boolean
+          description: true si repetir la misma petición más tarde puede funcionar (429, 409 EMISION_EN_CURSO, 5xx, SUNAT_NO_DISPONIBLE).
     NoCreditsError:
       allOf:
         - $ref: '#/components/schemas/Error'
@@ -1258,19 +1479,27 @@ components:
           required: [creditos_restantes]
           properties:
             creditos_restantes: { type: integer, const: 0 }
-    ErrorWithDebug:
+    ValidationError:
       type: object
-      description: Forma generada por el manejador global de excepciones de Laravel (incluye ruta y línea del archivo).
-      required: [success, message]
+      description: |
+        Error de validación por campo (`codigo: DATOS_INVALIDOS`). `campos` trae el mapa campo → mensajes.
+        Por compatibilidad, `message` puede ser ese mismo mapa (petición sin `Accept: application/json`),
+        y con `Accept: application/json` el mapa también aparece en la raíz del JSON.
+      required: [success, message, codigo, reintentable, campos]
       properties:
         success: { type: boolean, const: false }
         message:
-          description: Texto, o mapa de errores de validación.
+          description: 'Texto, o (sin `Accept: application/json`) el mapa de errores.'
           oneOf:
             - type: string
             - $ref: '#/components/schemas/ValidationErrorMap'
-        file: { type: string }
-        line: { type: integer }
+        codigo: { type: string, const: DATOS_INVALIDOS }
+        reintentable: { type: boolean, const: false }
+        campos: { $ref: '#/components/schemas/ValidationErrorMap' }
+      additionalProperties:
+        description: 'Con `Accept: application/json`, el mapa de errores también va en la raíz (compatibilidad).'
+        type: array
+        items: { type: string }
     ValidationErrorMap:
       type: object
       description: 'Mapa campo → lista de mensajes (Laravel). Ejemplo: `{"limite": ["El campo limite no debe ser mayor que 100."]}`.'
@@ -2147,3 +2376,49 @@ components:
         ruc: { type: string }
         activo: { type: boolean }
         mensaje: { type: string }
+
+    # ───────────── Webhooks ─────────────
+    WebhookEvento:
+      type: string
+      description: |
+        `comprobante.aceptado` (05), `comprobante.observado` (07), `comprobante.rechazado` (09),
+        `comprobante.anulado` (11) o `prueba` (enviado con el botón "Enviar prueba" del portal).
+      enum: [comprobante.aceptado, comprobante.observado, comprobante.rechazado, comprobante.anulado, prueba]
+    WebhookComprobante:
+      type: object
+      description: Cuerpo del aviso. Se firma tal cual se envía (verifica la firma sobre los bytes crudos).
+      required: [id, evento, ruc, external_id, serie_numero, tipo_documento, estado, estado_descripcion, aceptado_por_sunat, entorno, sunat, fecha]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Identificador único del aviso. Es el mismo en todos los reintentos; úsalo para no procesar dos veces el mismo aviso.
+        evento: { $ref: '#/components/schemas/WebhookEvento' }
+        ruc: { type: string, description: RUC emisor del comprobante. }
+        external_id: { type: string, description: 'El mismo `external_id` que devolvió `POST /documents`.' }
+        serie_numero: { type: string, description: 'Serie y número, ej. `F001-123`.' }
+        tipo_documento:
+          type: string
+          enum: ['01', '03', '07', '08']
+          description: '`01` factura, `03` boleta, `07` nota de crédito, `08` nota de débito.'
+        estado:
+          type: string
+          enum: ['05', '07', '09', '11']
+          description: Estado actual del comprobante.
+        estado_descripcion: { type: [string, 'null'], description: 'Descripción del estado, ej. `Aceptado`.' }
+        aceptado_por_sunat: { type: boolean, description: '`true` solo si `estado` es `05`.' }
+        entorno:
+          type: string
+          enum: [prueba, produccion]
+          description: '`prueba` (beta SUNAT, sin validez fiscal) o `produccion`.'
+        sunat:
+          type: object
+          description: Lo que respondió SUNAT. Ambos campos pueden ser `null`.
+          required: [codigo, descripcion]
+          properties:
+            codigo: { type: [string, 'null'] }
+            descripcion: { type: [string, 'null'] }
+        fecha:
+          type: string
+          format: date-time
+          description: Momento del cambio de estado (ISO 8601, hora de Lima). Descarta avisos con varios minutos de antigüedad si quieres protegerte de reenvíos.

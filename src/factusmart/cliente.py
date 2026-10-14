@@ -22,6 +22,7 @@ from .errores import (
     RucNoAutorizado,
     SinCreditos,
 )
+from .webhooks import verificar_firma_webhook as _verificar_firma_webhook
 
 __all__ = ["Cliente", "Transporte", "OPERACIONES", "hora_peru"]
 
@@ -52,6 +53,8 @@ OPERACIONES: Dict[str, str] = {
     "listRucs": "rucs.listar",
     "createRuc": "rucs.crear",
     "setRucActivation": "rucs.activar",
+    # Webhook: FactuSmart llama a TU servidor; el SDK solo verifica la firma.
+    "webhookComprobanteEstado": "verificar_firma_webhook",
 }
 
 # Perú no tiene horario de verano: UTC-5 fijo (funciona en Python 3.8 y en
@@ -140,12 +143,20 @@ def _segundos_de_espera(headers: Mapping[str, str], cuerpo: Any) -> Optional[flo
         except ValueError:
             pass
     if isinstance(cuerpo, dict):
+        segundos = cuerpo.get("retry_after")
+        if isinstance(segundos, (int, float)) and not isinstance(segundos, bool) and segundos >= 0:
+            return float(segundos)
         msg = cuerpo.get("message")
         if isinstance(msg, str):
             m = re.search(r"espera\s+(\d+(?:[.,]\d+)?)\s*segundo", msg, re.IGNORECASE)
             if m:
                 return float(m.group(1).replace(",", "."))
     return None
+
+
+def _pide_reintento(cuerpo: Any) -> bool:
+    """El servidor marca el error como reintentable (``"reintentable": true``)."""
+    return isinstance(cuerpo, dict) and cuerpo.get("reintentable") is True
 
 
 def _error_http(status: int, headers: Mapping[str, str], cuerpo: Any) -> FactuSmartError:
@@ -173,7 +184,8 @@ class Cliente:
     :param base_url: URL base de tu cuenta (cada cuenta vive en un servidor distinto).
     :param ruc: RUC emisor por defecto. Se puede cambiar en cada llamada con ``ruc=``.
     :param timeout: segundos de espera por petición (SUNAT a veces tarda).
-    :param max_reintentos: reintentos ante error de red, 429, 502, 503, 504.
+    :param max_reintentos: reintentos ante error de red, 429, 502, 503, 504 o una
+        respuesta con ``"reintentable": true`` (solo en operaciones seguras de repetir).
     :param verificar_ssl: ``False`` solo para pruebas locales con certificado propio.
     :param transporte: función HTTP alternativa (pruebas o proxies). Ver :data:`Transporte`.
     :param dormir: función de espera (por defecto ``time.sleep``); útil en pruebas.
@@ -231,6 +243,12 @@ class Cliente:
     def ping(self, ruc: Optional[str] = None) -> Dict[str, Any]:
         """Prueba la API key y devuelve el saldo (no consume crédito)."""
         return self._get("/ping", ruc=self._ruc(ruc))
+
+    # ------------------------------------------------------------- webhooks
+    @staticmethod
+    def verificar_firma_webhook(cuerpo_crudo: Any, firma: Any, secreto: Any) -> bool:
+        """Igual que :func:`factusmart.verificar_firma_webhook`."""
+        return _verificar_firma_webhook(cuerpo_crudo, firma, secreto)
 
     # ------------------------------------------------------------- internos
     def _ruc(self, ruc: Optional[str]) -> Optional[str]:
@@ -312,10 +330,14 @@ class Cliente:
                 return _decodificar(resp_cuerpo)
 
             decodificado = _decodificar(resp_cuerpo)
+            # Solo llega aquí con más de un intento si la operación es segura de
+            # repetir (``reintentable=True``): las prohibidas nunca se repiten,
+            # aunque el servidor diga ``"reintentable": true``.
             puede_reintentar = (
                 status in _REINTENTABLES
                 or _es_limite(status, decodificado)
                 or (reintentar_409 and status == 409)
+                or _pide_reintento(decodificado)
             )
             if puede_reintentar and not ultimo:
                 espera = espera_base
