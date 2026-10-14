@@ -27,7 +27,7 @@ if "factusmart.pe" in BASE_URL:
 
 CLIENTE_DNI = {
     "codigo_tipo_documento_identidad": "1",
-    "numero_documento": "77344962",
+    "numero_documento": "12345678",
     "apellidos_y_nombres_o_razon_social": "CLIENTE PRUEBA SDK PYTHON",
 }
 

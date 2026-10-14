@@ -54,7 +54,7 @@ EMISION_OK = {
 
 DATOS_BOLETA = {
     "codigo_tipo_documento": "03",
-    "datos_del_cliente_o_receptor": {"codigo_tipo_documento_identidad": "1", "numero_documento": "77344962"},
+    "datos_del_cliente_o_receptor": {"codigo_tipo_documento_identidad": "1", "numero_documento": "12345678"},
     "items": [{"descripcion": "X", "cantidad": 1}],
     "totales": {"total_venta": 1},
 }
