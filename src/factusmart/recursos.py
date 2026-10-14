@@ -306,12 +306,15 @@ class Catalogos(_Recurso):
         self,
         q: str,
         limite: Optional[int] = None,
+        nivel: Optional[str] = None,
         ruc: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Busca el código de producto SUNAT (catálogo 25) (``GET /catalogos/productos-sunat``).
 
         ``q``: código (exacto o prefijo, ``"4321"``) o texto (sin importar
         tildes, ``"computador"``). ``limite``: cuántas filas (máx. 50).
+        ``nivel``: ``"segmento"``, ``"familia"``, ``"clase"`` o ``"producto"``
+        (el que va en el comprobante); sin nivel no se manda.
         Devuelve ``catalogo``, ``catalogo_sunat`` (``"25"``), ``q``, ``total``,
         ``hay_mas`` y ``datos`` (``[{"codigo": ..., "descripcion": ...}]``).
         Es una consulta: se reintenta como cualquier GET.
@@ -319,5 +322,5 @@ class Catalogos(_Recurso):
         return self._c._get(
             "/catalogos/productos-sunat",
             ruc=self._c._ruc(ruc),
-            query={"q": q, "limite": limite},
+            query={"q": q, "limite": limite, "nivel": (nivel or "").strip() or None},
         )

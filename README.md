@@ -81,7 +81,7 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.comprobantes.calcular(items, porcentaje_igv=None)` | `POST /calcular` | dict (`success`, `items`, `totales`) |
 | `fs.catalogos.listar(ruc=None)` | `GET /catalogos` | dict (`catalogos`, `nota`) |
 | `fs.catalogos.consultar(nombre, q=None, ruc=None)` | `GET /catalogos/{nombre}` | dict (`catalogo`, `total`, `datos`) |
-| `fs.catalogos.buscar_producto_sunat(q, limite=None, ruc=None)` | `GET /catalogos/productos-sunat` | dict (`catalogo_sunat`, `total`, `hay_mas`, `datos`) |
+| `fs.catalogos.buscar_producto_sunat(q, limite=None, nivel=None, ruc=None)` | `GET /catalogos/productos-sunat` | dict (`catalogo_sunat`, `total`, `hay_mas`, `datos`) |
 | `fs.establecimientos.listar(ruc=None)` | `GET /establecimientos` | dict (`success`, `establecimientos`) |
 | `fs.establecimientos.crear(datos, ruc=None)` | `POST /establecimientos` | dict (`success`, `message`, `establecimiento`) |
 
@@ -118,7 +118,7 @@ llamar al API.
 ### Código de producto SUNAT
 
 ```python
-r = fs.catalogos.buscar_producto_sunat("computador", limite=10)
+r = fs.catalogos.buscar_producto_sunat("computador", limite=10, nivel="producto")
 for fila in r["datos"]:
     print(fila["codigo"], fila["descripcion"])  # 43211503 ...
 ```

@@ -392,6 +392,21 @@ class TestHerramientas(unittest.TestCase):
             ],
         )
 
+    def test_buscar_producto_sunat_con_nivel(self) -> None:
+        c, t, _ = cliente([(200, {}), (200, {}), (200, {})])
+        c.catalogos.buscar_producto_sunat("computador", nivel="producto")
+        c.catalogos.buscar_producto_sunat("43", limite=10, nivel="familia", ruc="20555555555")
+        c.catalogos.buscar_producto_sunat("computador", nivel="")
+        base = "https://api.test/api/v1/issuer"
+        self.assertEqual(
+            [p["url"][len(base):] for p in t.peticiones],
+            [
+                "/catalogos/productos-sunat?ruc=20123456789&q=computador&nivel=producto",
+                "/catalogos/productos-sunat?ruc=20555555555&q=43&limite=10&nivel=familia",
+                "/catalogos/productos-sunat?ruc=20123456789&q=computador",
+            ],
+        )
+
     def test_buscar_producto_sunat_se_reintenta_como_get(self) -> None:
         c, t, _ = cliente([(503, ""), (200, {"success": True, "datos": []})])
         c.catalogos.buscar_producto_sunat("x")
