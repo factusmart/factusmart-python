@@ -31,7 +31,8 @@ classifiers = [
 ]
 
 [project.urls]
-Documentacion = "https://factusmart.pe/api-facturacion-electronica/docs"
+Documentacion = "https://factusmart.pe/api-facturacion-electronica/docs/sdks"
+Repositorio = "https://github.com/factusmart/factusmart-python"
 
 [tool.setuptools.dynamic]
 version = { attr = "factusmart._version.__version__" }

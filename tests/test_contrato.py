@@ -4,7 +4,7 @@ Lee el archivo oficial sin dependencias (regex sobre ``operationId:``). Si el
 API crece y el SDK no, esta prueba falla.
 
 Ruta del archivo: variable de entorno ``FACTUSMART_OPENAPI`` o, por defecto,
-``C:\\laragon\\www\\factusmart\\docs\\api\\openapi.yaml``.
+``tests/fixtures/openapi.yaml`` (copia del archivo oficial).
 """
 
 import os
@@ -13,7 +13,7 @@ import unittest
 
 import factusmart
 
-RUTA_OPENAPI = os.environ.get("FACTUSMART_OPENAPI", r"C:\laragon\www\factusmart\docs\api\openapi.yaml")
+RUTA_OPENAPI = os.environ.get("FACTUSMART_OPENAPI", os.path.join(os.path.dirname(__file__), "fixtures", "openapi.yaml"))
 
 
 def operation_ids(ruta: str):
