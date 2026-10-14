@@ -63,7 +63,7 @@ DATOS_BOLETA = {
 def cliente(respuestas: List[Any], **kw: Any) -> Tuple[factusmart.Cliente, TransporteFalso, List[float]]:
     t = TransporteFalso(respuestas)
     esperas: List[float] = []
-    opciones: Dict[str, Any] = dict(api_key="k", base_url="https://api.test/api/v1/issuer/", ruc="20123456789")
+    opciones: Dict[str, Any] = dict(api_key="k", base_url="https://api.test/api/v1/issuer/", ruc="20100070970")
     opciones.update(kw)
     c = factusmart.Cliente(transporte=t, dormir=esperas.append, **opciones)
     return c, t, esperas
@@ -79,7 +79,7 @@ class TestConstructor(unittest.TestCase):
     def test_quita_barra_final_y_manda_api_key(self) -> None:
         c, t, _ = cliente([(200, {"success": True})])
         c.ping()
-        self.assertEqual(t.peticiones[0]["url"], "https://api.test/api/v1/issuer/ping?ruc=20123456789")
+        self.assertEqual(t.peticiones[0]["url"], "https://api.test/api/v1/issuer/ping?ruc=20100070970")
         self.assertEqual(t.peticiones[0]["headers"]["X-API-Key"], "k")
         self.assertEqual(t.peticiones[0]["headers"]["Accept"], "application/json")
 
@@ -210,7 +210,7 @@ class TestNoReintentar(unittest.TestCase):
             "guias.emitir": lambda c: c.guias.emitir({"serie_documento": "TA01"}),
             "comprobantes.reenviar": lambda c: c.comprobantes.reenviar("abc"),
             "comprobantes.consultar_sunat": lambda c: c.comprobantes.consultar_sunat("abc"),
-            "rucs.activar": lambda c: c.rucs.activar("20123456789", False),
+            "rucs.activar": lambda c: c.rucs.activar("20100070970", False),
         }
         for nombre, llamar in llamadas.items():
             with self.subTest(nombre):
@@ -239,7 +239,7 @@ class TestPayload(unittest.TestCase):
         c.comprobantes.emitir(DATOS_BOLETA)
         self.assertEqual(DATOS_BOLETA, original)
         cuerpo = t.peticiones[0]["cuerpo"]
-        self.assertEqual(cuerpo["ruc"], "20123456789")
+        self.assertEqual(cuerpo["ruc"], "20100070970")
         self.assertEqual(cuerpo["numero_documento"], "#")
         self.assertEqual(cuerpo["codigo_tipo_moneda"], "PEN")
         self.assertEqual(cuerpo["codigo_tipo_operacion"], "0101")
@@ -298,31 +298,31 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(pdf, b"%PDF-1.4")
         base = "https://api.test/api/v1/issuer"
         esperado = [
-            ("GET", "/ping?ruc=20123456789"),
+            ("GET", "/ping?ruc=20100070970"),
             ("GET", "/account"),
-            ("GET", "/series?ruc=20123456789"),
-            ("GET", "/documents?ruc=20123456789&estado=01&limite=5"),
-            ("GET", "/documents/id1?ruc=20123456789"),
+            ("GET", "/series?ruc=20100070970"),
+            ("GET", "/documents?ruc=20100070970&estado=01&limite=5"),
+            ("GET", "/documents/id1?ruc=20100070970"),
             ("POST", "/documents/id1/reenviar"),
             ("POST", "/documents/id1/consultar-sunat"),
-            ("GET", "/documents/id1/historial?ruc=20123456789"),
+            ("GET", "/documents/id1/historial?ruc=20100070970"),
             ("POST", "/anulaciones"),
-            ("GET", "/anulaciones/tk%2F1/status?ruc=20123456789"),
+            ("GET", "/anulaciones/tk%2F1/status?ruc=20100070970"),
             ("POST", "/guias"),
-            ("GET", "/guias/g1/status?ruc=20123456789"),
+            ("GET", "/guias/g1/status?ruc=20100070970"),
             ("GET", "/rucs"),
             ("POST", "/rucs"),
             ("PATCH", "/rucs/20609999991/activation"),
             ("POST", "/documents"),
-            ("GET", "/documents/id1/pdf?ruc=20123456789"),
+            ("GET", "/documents/id1/pdf?ruc=20100070970"),
         ]
         self.assertEqual([(p["metodo"], p["url"][len(base):]) for p in t.peticiones], esperado)
         cuerpos = {p["url"][len(base):]: p["cuerpo"] for p in t.peticiones if p["metodo"] != "GET"}
-        self.assertEqual(cuerpos["/documents/id1/reenviar"], {"ruc": "20123456789"})
+        self.assertEqual(cuerpos["/documents/id1/reenviar"], {"ruc": "20100070970"})
         self.assertEqual(cuerpos["/rucs"], {"ruc": "20609999991"})  # /rucs no lleva RUC emisor
         self.assertEqual(cuerpos["/rucs/20609999991/activation"], {"activo": True})
         guia = cuerpos["/guias"]
-        self.assertEqual((guia["ruc"], guia["numero_documento"]), ("20123456789", "#"))
+        self.assertEqual((guia["ruc"], guia["numero_documento"]), ("20100070970", "#"))
         self.assertNotIn("Idempotency-Key", t.peticiones[10]["headers"])
 
     def test_descargar_tipo_invalido(self) -> None:
@@ -358,16 +358,16 @@ class TestHerramientas(unittest.TestCase):
         c, t, _ = cliente([(200, {})] * 4)
         c.catalogos.listar()
         c.catalogos.consultar("07")
-        c.catalogos.consultar("unidades", q="kilo gr", ruc="20555555555")
+        c.catalogos.consultar("unidades", q="kilo gr", ruc="20131312955")
         c.catalogos.consultar("a/b")
         base = "https://api.test/api/v1/issuer"
         self.assertEqual(
             [(p["metodo"], p["url"][len(base):]) for p in t.peticiones],
             [
-                ("GET", "/catalogos?ruc=20123456789"),
-                ("GET", "/catalogos/07?ruc=20123456789"),
-                ("GET", "/catalogos/unidades?ruc=20555555555&q=kilo+gr"),
-                ("GET", "/catalogos/a%2Fb?ruc=20123456789"),
+                ("GET", "/catalogos?ruc=20100070970"),
+                ("GET", "/catalogos/07?ruc=20100070970"),
+                ("GET", "/catalogos/unidades?ruc=20131312955&q=kilo+gr"),
+                ("GET", "/catalogos/a%2Fb?ruc=20100070970"),
             ],
         )
 
@@ -380,30 +380,30 @@ class TestHerramientas(unittest.TestCase):
         resp = {"success": True, "catalogo_sunat": "25", "total": 1, "hay_mas": False, "datos": [{"codigo": "43211503"}]}
         c, t, _ = cliente([(200, resp), (200, resp), (200, resp)])
         self.assertEqual(c.catalogos.buscar_producto_sunat("computador"), resp)
-        c.catalogos.buscar_producto_sunat("4321", limite=50, ruc="20555555555")
+        c.catalogos.buscar_producto_sunat("4321", limite=50, ruc="20131312955")
         c.catalogos.buscar_producto_sunat("cafe", limite=5)
         base = "https://api.test/api/v1/issuer"
         self.assertEqual(
             [(p["metodo"], p["url"][len(base):], p["cuerpo"]) for p in t.peticiones],
             [
-                ("GET", "/catalogos/productos-sunat?ruc=20123456789&q=computador", None),
-                ("GET", "/catalogos/productos-sunat?ruc=20555555555&q=4321&limite=50", None),
-                ("GET", "/catalogos/productos-sunat?ruc=20123456789&q=cafe&limite=5", None),
+                ("GET", "/catalogos/productos-sunat?ruc=20100070970&q=computador", None),
+                ("GET", "/catalogos/productos-sunat?ruc=20131312955&q=4321&limite=50", None),
+                ("GET", "/catalogos/productos-sunat?ruc=20100070970&q=cafe&limite=5", None),
             ],
         )
 
     def test_buscar_producto_sunat_con_nivel(self) -> None:
         c, t, _ = cliente([(200, {}), (200, {}), (200, {})])
         c.catalogos.buscar_producto_sunat("computador", nivel="producto")
-        c.catalogos.buscar_producto_sunat("43", limite=10, nivel="familia", ruc="20555555555")
+        c.catalogos.buscar_producto_sunat("43", limite=10, nivel="familia", ruc="20131312955")
         c.catalogos.buscar_producto_sunat("computador", nivel="")
         base = "https://api.test/api/v1/issuer"
         self.assertEqual(
             [p["url"][len(base):] for p in t.peticiones],
             [
-                "/catalogos/productos-sunat?ruc=20123456789&q=computador&nivel=producto",
-                "/catalogos/productos-sunat?ruc=20555555555&q=43&limite=10&nivel=familia",
-                "/catalogos/productos-sunat?ruc=20123456789&q=computador",
+                "/catalogos/productos-sunat?ruc=20100070970&q=computador&nivel=producto",
+                "/catalogos/productos-sunat?ruc=20131312955&q=43&limite=10&nivel=familia",
+                "/catalogos/productos-sunat?ruc=20100070970&q=computador",
             ],
         )
 
@@ -421,10 +421,10 @@ class TestEstablecimientos(unittest.TestCase):
         resp = {"success": True, "establecimientos": [{"codigo_anexo": "0000", "predeterminado": True}]}
         c, t, _ = cliente([(200, resp), (200, resp)])
         self.assertEqual(c.establecimientos.listar(), resp)
-        c.establecimientos.listar(ruc="20555555555")
+        c.establecimientos.listar(ruc="20131312955")
         self.assertEqual(
             [(p["metodo"], p["url"][len(self.BASE):], p["cuerpo"]) for p in t.peticiones],
-            [("GET", "/establecimientos?ruc=20123456789", None), ("GET", "/establecimientos?ruc=20555555555", None)],
+            [("GET", "/establecimientos?ruc=20100070970", None), ("GET", "/establecimientos?ruc=20131312955", None)],
         )
 
     def test_listar_se_reintenta_como_get(self) -> None:
@@ -436,14 +436,14 @@ class TestEstablecimientos(unittest.TestCase):
         original = dict(self.DATOS)
         c, t, _ = cliente([(201, {"success": True, "establecimiento": {"id": 2}}), (201, {}), (201, {})])
         self.assertEqual(c.establecimientos.crear(self.DATOS), {"success": True, "establecimiento": {"id": 2}})
-        c.establecimientos.crear(self.DATOS, ruc="20555555555")
-        c.establecimientos.crear(dict(self.DATOS, ruc="20999999999"), ruc="20555555555")
+        c.establecimientos.crear(self.DATOS, ruc="20131312955")
+        c.establecimientos.crear(dict(self.DATOS, ruc="20999999999"), ruc="20131312955")
         self.assertEqual(self.DATOS, original)
         for p in t.peticiones:
             self.assertEqual((p["metodo"], p["url"]), ("POST", self.BASE + "/establecimientos"))
             self.assertNotIn("Idempotency-Key", p["headers"])
-        self.assertEqual(t.peticiones[0]["cuerpo"], dict(self.DATOS, ruc="20123456789"))
-        self.assertEqual(t.peticiones[1]["cuerpo"]["ruc"], "20555555555")
+        self.assertEqual(t.peticiones[0]["cuerpo"], dict(self.DATOS, ruc="20100070970"))
+        self.assertEqual(t.peticiones[1]["cuerpo"]["ruc"], "20131312955")
         self.assertEqual(t.peticiones[2]["cuerpo"]["ruc"], "20999999999")  # el de datos manda
 
     def test_crear_nunca_se_reintenta(self) -> None:
@@ -488,10 +488,10 @@ class TestFormatoPdf(unittest.TestCase):
         self.assertEqual(
             [p["url"][len(self.BASE):] for p in t.peticiones],
             [
-                "/documents/id1/pdf?ruc=20123456789",
-                "/documents/id1/pdf?ruc=20123456789&formato=ticket",
-                "/documents/id1/pdf?ruc=20123456789&formato=ticket58",
-                "/documents/id1/xml?ruc=20123456789",
+                "/documents/id1/pdf?ruc=20100070970",
+                "/documents/id1/pdf?ruc=20100070970&formato=ticket",
+                "/documents/id1/pdf?ruc=20100070970&formato=ticket58",
+                "/documents/id1/xml?ruc=20100070970",
             ],
         )
         self.assertTrue(all(p["metodo"] == "GET" for p in t.peticiones))

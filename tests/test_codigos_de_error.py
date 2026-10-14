@@ -55,7 +55,7 @@ class TestCodigoReintentableCampos(unittest.TestCase):
     def test_tipos_raros_no_se_aceptan(self) -> None:
         c, _, _ = cliente([(422, {"message": "x", "codigo": 5, "reintentable": "true", "campos": ["a"]})])
         with self.assertRaises(errores.ErrorDeValidacion) as ctx:
-            c.rucs.activar("20123456789", True)
+            c.rucs.activar("20100070970", True)
         self.assertIsNone(ctx.exception.codigo)
         self.assertIsNone(ctx.exception.reintentable)
         self.assertEqual(ctx.exception.campos, {})
@@ -117,7 +117,7 @@ class TestReintentableDelServidor(unittest.TestCase):
             "guias.emitir": lambda c: c.guias.emitir({"serie_documento": "TA01"}),
             "comprobantes.reenviar": lambda c: c.comprobantes.reenviar("abc"),
             "comprobantes.consultar_sunat": lambda c: c.comprobantes.consultar_sunat("abc"),
-            "rucs.activar": lambda c: c.rucs.activar("20123456789", False),
+            "rucs.activar": lambda c: c.rucs.activar("20100070970", False),
         }
         for nombre, llamar in llamadas.items():
             for status, cuerpo in ((500, ERROR_INTERNO), (422, SUNAT_CAIDA)):

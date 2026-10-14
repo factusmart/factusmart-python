@@ -4,13 +4,13 @@ Uso::
 
     import factusmart
 
-    fs = factusmart.Cliente(api_key="TU_API_KEY", base_url="https://TU_URL_BASE/api/v1/issuer", ruc="20123456789")
+    fs = factusmart.Cliente(api_key="TU_API_KEY", base_url="https://TU_URL_BASE/api/v1/issuer", ruc="20100070970")
     calc = factusmart.calcular_comprobante([
         {"descripcion": "Servicio de consultoría", "cantidad": 1, "valor_unitario": 100, "afectacion": "10"},
     ])
     r = fs.comprobantes.emitir({
         "codigo_tipo_documento": "01",
-        "datos_del_cliente_o_receptor": {"codigo_tipo_documento_identidad": "6", "numero_documento": "20555555555"},
+        "datos_del_cliente_o_receptor": {"codigo_tipo_documento_identidad": "6", "numero_documento": "20131312955"},
         **calc,
     })
     print(r["aceptado_por_sunat"], r["serie_numero"])

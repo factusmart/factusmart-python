@@ -191,7 +191,7 @@ def _error_http(status: int, headers: Mapping[str, str], cuerpo: Any) -> FactuSm
 class Cliente:
     """Cliente del API de facturación electrónica de FactuSmart.
 
-    >>> fs = Cliente(api_key="TU_API_KEY", base_url="https://TU_URL_BASE/api/v1/issuer", ruc="20123456789")
+    >>> fs = Cliente(api_key="TU_API_KEY", base_url="https://TU_URL_BASE/api/v1/issuer", ruc="20100070970")
     >>> fs.ping()["success"]
     True
 
