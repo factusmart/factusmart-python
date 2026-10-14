@@ -43,6 +43,18 @@ class TestContrato(unittest.TestCase):
                 faltan.append("{} -> {} (no existe)".format(op, ruta))
         self.assertEqual(faltan, [], "operationId sin método en el SDK: {}".format(faltan))
 
+    def test_herramientas_mapeadas(self) -> None:
+        ids = set(operation_ids(RUTA_OPENAPI))
+        esperado = {
+            "calculateDocument": "comprobantes.calcular",
+            "listCatalogs": "catalogos.listar",
+            "getCatalog": "catalogos.consultar",
+        }
+        for op, metodo in esperado.items():
+            with self.subTest(op):
+                self.assertIn(op, ids)
+                self.assertEqual(factusmart.OPERACIONES.get(op), metodo)
+
     def test_no_sobran_operaciones(self) -> None:
         ids = set(operation_ids(RUTA_OPENAPI))
         sobran = set(factusmart.OPERACIONES) - ids

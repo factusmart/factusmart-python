@@ -60,6 +60,12 @@ class CodigoDeError:
     REENVIO_FALLIDO = "REENVIO_FALLIDO"
     SUNAT_NO_DISPONIBLE = "SUNAT_NO_DISPONIBLE"
     LIMITE_PETICIONES = "LIMITE_PETICIONES"
+    #: 429 no reintentable: tope diario de pruebas en RUCs demo (se reinicia a medianoche de Lima).
+    LIMITE_PRUEBAS_DIARIO = "LIMITE_PRUEBAS_DIARIO"
+    #: 422: facturas y boletas juntas en la misma anulación.
+    ANULACION_MIXTA = "ANULACION_MIXTA"
+    #: 403: llave de prueba usada contra un RUC en producción.
+    LLAVE_DE_PRUEBA_EN_PRODUCCION = "LLAVE_DE_PRUEBA_EN_PRODUCCION"
     ERROR_INTERNO = "ERROR_INTERNO"
 
 
@@ -145,6 +151,10 @@ class LimiteDePeticiones(FactuSmartError):
     """Límite de peticiones superado (HTTP 429, o HTTP 500 "Too Many Attempts.").
 
     ``segundos_de_espera`` trae cuántos segundos esperar, si se pudo leer.
+
+    Mira ``codigo``: con ``LIMITE_PRUEBAS_DIARIO`` (``reintentable=False``) se
+    agotó el tope diario de pruebas del RUC demo y no sirve reintentar hasta
+    medianoche de Lima; el SDK lo lanza tras una sola petición.
     """
 
     def __init__(

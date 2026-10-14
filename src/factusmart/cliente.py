@@ -53,6 +53,9 @@ OPERACIONES: Dict[str, str] = {
     "listRucs": "rucs.listar",
     "createRuc": "rucs.crear",
     "setRucActivation": "rucs.activar",
+    "calculateDocument": "comprobantes.calcular",
+    "listCatalogs": "catalogos.listar",
+    "getCatalog": "catalogos.consultar",
     # Webhook: FactuSmart llama a TU servidor; el SDK solo verifica la firma.
     "webhookComprobanteEstado": "verificar_firma_webhook",
 }
@@ -159,6 +162,15 @@ def _pide_reintento(cuerpo: Any) -> bool:
     return isinstance(cuerpo, dict) and cuerpo.get("reintentable") is True
 
 
+def _prohibe_reintento(cuerpo: Any) -> bool:
+    """El servidor dice ``"reintentable": false``: manda sobre la regla por HTTP.
+
+    Caso real: 429 ``LIMITE_PRUEBAS_DIARIO`` (tope diario de pruebas en RUCs demo,
+    se reinicia a medianoche de Lima): repetir no sirve hasta el día siguiente.
+    """
+    return isinstance(cuerpo, dict) and cuerpo.get("reintentable") is False
+
+
 def _error_http(status: int, headers: Mapping[str, str], cuerpo: Any) -> FactuSmartError:
     mensaje = _mensaje_de(cuerpo, status)
     if _es_limite(status, cuerpo):
@@ -186,6 +198,7 @@ class Cliente:
     :param timeout: segundos de espera por petición (SUNAT a veces tarda).
     :param max_reintentos: reintentos ante error de red, 429, 502, 503, 504 o una
         respuesta con ``"reintentable": true`` (solo en operaciones seguras de repetir).
+        Una respuesta con ``"reintentable": false`` no se repite nunca.
     :param verificar_ssl: ``False`` solo para pruebas locales con certificado propio.
     :param transporte: función HTTP alternativa (pruebas o proxies). Ver :data:`Transporte`.
     :param dormir: función de espera (por defecto ``time.sleep``); útil en pruebas.
@@ -227,7 +240,7 @@ class Cliente:
             self._contexto = ctx
 
         # Imports aquí para evitar ciclos.
-        from .recursos import Anulaciones, Comprobantes, Cuenta, Guias, Rucs, Series
+        from .recursos import Anulaciones, Catalogos, Comprobantes, Cuenta, Guias, Rucs, Series
 
         self.cuenta = Cuenta(self)
         self.series = Series(self)
@@ -235,6 +248,7 @@ class Cliente:
         self.anulaciones = Anulaciones(self)
         self.guias = Guias(self)
         self.rucs = Rucs(self)
+        self.catalogos = Catalogos(self)
 
     def __repr__(self) -> str:
         return "Cliente(base_url={!r}, ruc={!r})".format(self.base_url, self.ruc)
@@ -333,7 +347,9 @@ class Cliente:
             # Solo llega aquí con más de un intento si la operación es segura de
             # repetir (``reintentable=True``): las prohibidas nunca se repiten,
             # aunque el servidor diga ``"reintentable": true``.
-            puede_reintentar = (
+            # ``"reintentable": false`` en el cuerpo manda: no se repite nunca,
+            # aunque el HTTP sea 429/409/5xx. Sin ese campo, regla por HTTP.
+            puede_reintentar = not _prohibe_reintento(decodificado) and (
                 status in _REINTENTABLES
                 or _es_limite(status, decodificado)
                 or (reintentar_409 and status == 409)

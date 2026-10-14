@@ -331,5 +331,51 @@ class TestPayload(unittest.TestCase):
             c.comprobantes.descargar("id1", "zip")
 
 
+class TestHerramientas(unittest.TestCase):
+    ITEMS = [{"descripcion": "Menu", "cantidad": 3, "precio_unitario": 10, "afectacion": "10"}]
+
+    def test_calcular_no_manda_ruc_y_devuelve_tal_cual(self) -> None:
+        resp = {"success": True, "items": [{"total_item": 30}], "totales": {"total_venta": 30}}
+        c, t, _ = cliente([(200, resp)])
+        self.assertEqual(c.comprobantes.calcular(self.ITEMS), resp)
+        p = t.peticiones[0]
+        self.assertEqual((p["metodo"], p["url"]), ("POST", "https://api.test/api/v1/issuer/calcular"))
+        self.assertEqual(p["cuerpo"], {"items": self.ITEMS})
+        self.assertNotIn("Idempotency-Key", p["headers"])
+
+    def test_calcular_con_porcentaje_igv(self) -> None:
+        c, t, _ = cliente([(200, {})])
+        c.comprobantes.calcular(self.ITEMS, porcentaje_igv=10.5)
+        self.assertEqual(t.peticiones[0]["cuerpo"], {"items": self.ITEMS, "porcentaje_igv": 10.5})
+
+    def test_calcular_se_reintenta_como_un_get(self) -> None:
+        c, t, esperas = cliente([(503, {}), urllib.error.URLError("x"), (200, {"success": True})])
+        self.assertEqual(c.comprobantes.calcular(self.ITEMS), {"success": True})
+        self.assertEqual(len(t.peticiones), 3)
+        self.assertEqual(esperas, [1.0, 2.0])
+
+    def test_catalogos_rutas(self) -> None:
+        c, t, _ = cliente([(200, {})] * 4)
+        c.catalogos.listar()
+        c.catalogos.consultar("07")
+        c.catalogos.consultar("unidades", q="kilo gr", ruc="20555555555")
+        c.catalogos.consultar("a/b")
+        base = "https://api.test/api/v1/issuer"
+        self.assertEqual(
+            [(p["metodo"], p["url"][len(base):]) for p in t.peticiones],
+            [
+                ("GET", "/catalogos?ruc=20123456789"),
+                ("GET", "/catalogos/07?ruc=20123456789"),
+                ("GET", "/catalogos/unidades?ruc=20555555555&q=kilo+gr"),
+                ("GET", "/catalogos/a%2Fb?ruc=20123456789"),
+            ],
+        )
+
+    def test_catalogos_sin_ruc(self) -> None:
+        c, t, _ = cliente([(200, {})], ruc=None)
+        c.catalogos.listar()
+        self.assertTrue(t.peticiones[0]["url"].endswith("/catalogos"))
+
+
 if __name__ == "__main__":
     unittest.main()

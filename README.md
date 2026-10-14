@@ -78,10 +78,17 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.rucs.listar()` | `GET /rucs` | dict |
 | `fs.rucs.crear(datos)` | `POST /rucs` | dict |
 | `fs.rucs.activar(ruc, activo)` | `PATCH /rucs/{ruc}/activation` | dict |
+| `fs.comprobantes.calcular(items, porcentaje_igv=None)` | `POST /calcular` | dict (`success`, `items`, `totales`) |
+| `fs.catalogos.listar(ruc=None)` | `GET /catalogos` | dict (`catalogos`, `nota`) |
+| `fs.catalogos.consultar(nombre, q=None, ruc=None)` | `GET /catalogos/{nombre}` | dict (`catalogo`, `total`, `datos`) |
 
 Filtros de `comprobantes.listar`: `estado`, `desde`, `hasta` (YYYY-MM-DD),
 `limite` (1 a 100) y `antes_de` (pasa el `siguiente_cursor` de la página
 anterior).
+
+`catalogos.consultar` acepta el nombre (`"unidades"`) o el número SUNAT
+(`"03"`); `q` filtra por código o descripción. Usa solo las filas con
+`activo: True`: el RUC valida contra ellas al emitir.
 
 Guardar el PDF:
 
@@ -104,6 +111,31 @@ Solo si no lo mandas:
 `guias.emitir` completa igual `numero_documento`, `fecha_de_emision` y
 `hora_de_emision`.
 
+### Anular facturas y boletas
+
+`anulaciones.crear` anula **facturas y boletas** (y sus notas). El API elige el
+camino solo:
+
+| Mandas | SUNAT lo anula con | `tipo` | `identificador` |
+|---|---|---|---|
+| Facturas | Comunicación de baja | `"baja"` | `RA-AAAAMMDD-N` |
+| Boletas (solo aceptadas, estado `05`) | Resumen diario | `"resumen"` | `RC-AAAAMMDD-N` |
+| Las dos juntas | — | `ErrorDeValidacion` con `codigo` `ANULACION_MIXTA` | — |
+
+Haz una petición por tipo. La respuesta trae `tipo`, `identificador`, `ticket`,
+`external_id`, `creditos_restantes`, `credito_cobrado` y, en RUCs demo,
+`modo_demo` y `pruebas_restantes_hoy`. Consulta el resultado con
+`anulaciones.estado(ticket)` (trae también `tipo` y `documentos`). Nunca se
+reintenta sola.
+
+```python
+r = fs.anulaciones.crear({
+    "fecha_de_emision_de_documentos": "14-10-2026",  # DD-MM-AAAA
+    "documentos": [{"external_id": boleta["external_id"], "motivo_anulacion": "Error en el comprobante"}],
+})
+print(r["tipo"], r["identificador"], r["ticket"])
+```
+
 ## Calcular IGV y totales
 
 El API espera los importes ya calculados. `calcular_comprobante` lo hace por ti:
@@ -121,7 +153,40 @@ Opcionales por ítem: `codigo_interno` (recomendado: el SKU de tu sistema) y
 `unidad_de_medida` (por defecto `NIU`; usa `ZZ` para servicios).
 
 Redondea a 2 decimales por ítem con `decimal.Decimal` y ROUND_HALF_UP, así da
-**exactamente los mismos números** que los SDK de PHP y Node.
+**exactamente los mismos números** que los SDK de PHP y Node y que
+`POST /calcular`.
+
+### ¿Calcular en el servidor o local?
+
+| | `fs.comprobantes.calcular(items)` (servidor) | `factusmart.calcular_comprobante(items)` (local) |
+|---|---|---|
+| Petición HTTP | sí (`POST /calcular`, no emite ni cobra crédito, no lleva RUC) | **no** |
+| Precio | `valor_unitario` (sin IGV) **o** `precio_unitario` (con IGV) | solo `valor_unitario` (sin IGV) |
+| Tasa de IGV | 18 % o **10.5 %** (`porcentaje_igv=10.5`, Ley 31556) | solo 18 % |
+
+- Usa el **servidor** si tienes precios con IGV (respeta lo que paga el
+  cliente: 3 × S/ 10.00 = S/ 30.00, no S/ 29.99), si aplicas la tasa reducida
+  de 10.5 % o si quieres que el cálculo lo haga siempre FactuSmart. Los errores
+  vienen en `e.campos` con clave `items.N.campo`. Se reintenta como una
+  consulta (no tiene efectos).
+- Usa el **local** si quieres cero peticiones extra. Para los casos que admite,
+  da los mismos números que el servidor.
+
+```python
+calc = fs.comprobantes.calcular(
+    [{"descripcion": "Menú", "cantidad": 3, "precio_unitario": 10, "afectacion": "10", "unidad_de_medida": "ZZ"}],
+    porcentaje_igv=10.5,
+)
+r = fs.comprobantes.emitir({"codigo_tipo_documento": "03", "datos_del_cliente_o_receptor": {"codigo_tipo_documento_identidad": "1", "numero_documento": "12345678"},
+                            "items": calc["items"], "totales": calc["totales"]})
+```
+
+## RUCs demo (pruebas)
+
+En un RUC en modo demo **no se cobra crédito**: emitir y anular responden
+`credito_cobrado: False`, `modo_demo: True` y `pruebas_restantes_hoy`. Hay un
+tope de 200 operaciones por día; al superarlo llega `LimiteDePeticiones` con
+`codigo` `LIMITE_PRUEBAS_DIARIO` (no reintentable).
 
 ## La regla de oro: revisa `aceptado_por_sunat`
 
@@ -181,6 +246,9 @@ Códigos más comunes (lista completa en la documentación del API y en
 | `DATOS_INVALIDOS` | 422 | no | Corrige los datos (detalle en `campos`) |
 | `SUNAT_NO_DISPONIBLE` | 422 / 5xx | sí | Reintenta más tarde |
 | `LIMITE_PETICIONES` | 429 | sí | Espera `segundos_de_espera` |
+| `LIMITE_PRUEBAS_DIARIO` | 429 | **no** | Tope de 200 pruebas/día del RUC demo; se reinicia a medianoche (Lima) |
+| `ANULACION_MIXTA` | 422 | no | Anula facturas y boletas en peticiones separadas |
+| `LLAVE_DE_PRUEBA_EN_PRODUCCION` | 403 | no | Usa tu llave de producción con un RUC en producción |
 | `ERROR_INTERNO` | 5xx | sí | Reintenta; si persiste, contacta soporte |
 
 Un `codigo` desconocido trátalo como no reintentable salvo que `reintentable`
@@ -220,6 +288,14 @@ except errores.FactuSmartError as e:
   Idempotency-Key") también se reintenta con la misma clave.
 - Se reintentan las consultas (GET) y `rucs.crear` (el API es idempotente por
   RUC).
+- **`"reintentable": false` manda:** si la respuesta de error lo trae, no se
+  reintenta nunca, aunque el HTTP sea 429, 409 o 5xx. Caso real: `429` con
+  `codigo` `LIMITE_PRUEBAS_DIARIO` (tope de 200 operaciones/día en RUCs demo,
+  se reinicia a medianoche de Lima): se lanza `LimiteDePeticiones` tras **una
+  sola** petición, con `e.codigo == "LIMITE_PRUEBAS_DIARIO"` y
+  `e.reintentable is False`. Decide por `codigo`, no por la clase. Si el
+  servidor no envía `reintentable`, se aplica la regla por HTTP.
+- `comprobantes.calcular` se reintenta como una consulta GET (no tiene efectos).
 - **Nunca** se reintentan solas: `anulaciones.crear`, `guias.emitir`,
   `comprobantes.reenviar`, `comprobantes.consultar_sunat` y `rucs.activar`,
   **aunque** la respuesta diga `"reintentable": true`. Ahí decides tú (mira
@@ -267,8 +343,9 @@ python -m unittest discover -s tests -v
   si algún `operationId` no tiene método en el SDK.
 - `test_integracion.py` va contra el API **local** (`FACTUSMART_TEST_BASE_URL`,
   `FACTUSMART_TEST_API_KEY`, `FACTUSMART_TEST_RUC`; `FACTUSMART_INTEGRACION=0`
-  para saltarlas). Por defecto usa el RUC `20777666555`. Gasta 2 créditos por corrida. Se niega a correr contra
-  `factusmart.pe`.
+  para saltarlas). Por defecto usa el RUC `20777666555` (demo: no gasta
+  créditos). Hace solo 2 emisiones nuevas por corrida (hay un tope de 200
+  operaciones/día por cuenta). Se niega a correr contra `factusmart.pe`.
 
 ## Licencia
 

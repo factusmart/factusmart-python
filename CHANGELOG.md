@@ -18,6 +18,22 @@
 - `comprobantes.descargar()` de un comprobante inexistente: el API ahora
   responde 404 en JSON; se lanza `NoEncontrado` con su `message` y
   `codigo="NO_ENCONTRADO"`.
+- Nuevo `comprobantes.calcular(items, porcentaje_igv=None)` (`POST /calcular`):
+  calcula `items` y `totales` en el servidor sin emitir ni cobrar. Admite
+  `precio_unitario` con IGV y la tasa reducida de 10.5 % (Ley 31556). No manda
+  RUC y se reintenta como una consulta. `calcular_comprobante` (local, sin red)
+  se mantiene.
+- Nuevo recurso `catalogos`: `listar(ruc=None)` (`GET /catalogos`) y
+  `consultar(nombre, q=None, ruc=None)` (`GET /catalogos/{nombre}`).
+- `"reintentable": false` en una respuesta de error manda: no se reintenta
+  nunca, aunque el HTTP sea 429/409/5xx. Un `429` con `codigo`
+  `LIMITE_PRUEBAS_DIARIO` lanza `LimiteDePeticiones` tras una sola petición.
+- `CodigoDeError`: nuevos `LIMITE_PRUEBAS_DIARIO`, `ANULACION_MIXTA` y
+  `LLAVE_DE_PRUEBA_EN_PRODUCCION`.
+- `anulaciones.crear` documenta que también anula boletas (resumen diario) y
+  que la respuesta trae `tipo` (`baja` | `resumen`) e `identificador`.
+- En RUCs demo el API ya no cobra crédito (`credito_cobrado: False`); la prueba
+  de idempotencia ya no depende de que baje el saldo.
 
 ## 0.1.x
 

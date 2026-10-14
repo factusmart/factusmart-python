@@ -1,15 +1,15 @@
-"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías y RUCs.
+"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías, RUCs y catálogos.
 
 Los datos (payload y respuesta) van tal cual los define el API, con las claves
 en español. El SDK no las traduce.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Union
 
 if TYPE_CHECKING:  # pragma: no cover
     from .cliente import Cliente
 
-__all__ = ["Cuenta", "Series", "Comprobantes", "Anulaciones", "Guias", "Rucs", "TIPOS_DE_ARCHIVO"]
+__all__ = ["Cuenta", "Series", "Comprobantes", "Anulaciones", "Guias", "Rucs", "Catalogos", "TIPOS_DE_ARCHIVO"]
 
 #: Archivos que se pueden descargar de un comprobante.
 TIPOS_DE_ARCHIVO = ("pdf", "xml", "cdr")
@@ -109,17 +109,56 @@ class Comprobantes(_Recurso):
         ruta = "/documents/{}/historial".format(self._c._segmento(external_id))
         return self._c._get(ruta, ruc=self._c._ruc(ruc))
 
+    def calcular(
+        self,
+        items: Sequence[Mapping[str, Any]],
+        porcentaje_igv: Optional[Union[int, float]] = None,
+    ) -> Dict[str, Any]:
+        """Calcula ``items`` y ``totales`` en el servidor sin emitir (``POST /calcular``).
+
+        No emite ni consume crédito y no lleva RUC. Cada ítem trae
+        ``descripcion``, ``cantidad``, ``afectacion`` y ``valor_unitario`` (sin
+        IGV) **o** ``precio_unitario`` (con IGV: respeta lo que paga el cliente,
+        3 × S/ 10.00 = S/ 30.00). ``porcentaje_igv``: 18 (por defecto) o 10.5
+        (tasa reducida, Ley 31556).
+
+        Devuelve la respuesta tal cual (``success``, ``items``, ``totales``),
+        lista para copiar ``items`` y ``totales`` en :meth:`emitir`. Como no
+        tiene efectos, se reintenta igual que una consulta GET. Para calcular
+        sin red (solo ``valor_unitario`` y 18 %) usa
+        :func:`factusmart.calcular_comprobante`.
+        """
+        cuerpo: Dict[str, Any] = {"items": [dict(i) for i in items]}
+        if porcentaje_igv is not None:
+            cuerpo["porcentaje_igv"] = porcentaje_igv
+        return self._c._peticion("POST", "/calcular", cuerpo=cuerpo, reintentable=True)
+
 
 class Anulaciones(_Recurso):
     def crear(self, datos: Mapping[str, Any], ruc: Optional[str] = None) -> Dict[str, Any]:
-        """Comunicación de baja (``POST /anulaciones``). Cuesta 1 crédito. Nunca se reintenta sola.
+        """Anula facturas o boletas (``POST /anulaciones``). Nunca se reintenta sola.
+
+        El API elige el camino: facturas (y sus notas) van por comunicación de
+        baja (``tipo: "baja"``, ``identificador`` ``RA-…``); boletas (y sus
+        notas, solo las aceptadas, estado ``05``) por resumen diario
+        (``tipo: "resumen"``, ``identificador`` ``RC-…``). Facturas y boletas
+        juntas → ``ErrorDeValidacion`` con ``codigo`` ``ANULACION_MIXTA``: haz
+        una petición por tipo.
+
+        La respuesta trae ``tipo``, ``identificador``, ``ticket``,
+        ``external_id``, ``creditos_restantes``, ``credito_cobrado`` y, en RUCs
+        demo (sin costo), ``modo_demo`` y ``pruebas_restantes_hoy``. Cuesta 1
+        crédito salvo en demo.
 
         ``fecha_de_emision_de_documentos`` va en formato DD-MM-AAAA.
         """
         return self._c._peticion("POST", "/anulaciones", cuerpo=self._c._cuerpo_con_ruc(datos, ruc))
 
     def estado(self, ticket: str, ruc: Optional[str] = None) -> Dict[str, Any]:
-        """Resultado de la baja en SUNAT (``GET /anulaciones/{ticket}/status``)."""
+        """Resultado de la anulación en SUNAT (``GET /anulaciones/{ticket}/status``).
+
+        Trae también ``tipo`` (``baja`` | ``resumen``) y ``documentos``.
+        """
         ruta = "/anulaciones/{}/status".format(self._c._segmento(ticket))
         return self._c._get(ruta, ruc=self._c._ruc(ruc))
 
@@ -169,3 +208,22 @@ class Rucs(_Recurso):
         """Activa (``True``) o desactiva (``False``) un RUC (``PATCH /rucs/{ruc}/activation``)."""
         ruta = "/rucs/{}/activation".format(self._c._segmento(ruc))
         return self._c._peticion("PATCH", ruta, cuerpo={"activo": bool(activo)})
+
+
+class Catalogos(_Recurso):
+    """Catálogos SUNAT (unidades, afectación del IGV, monedas…). No consumen crédito."""
+
+    def listar(self, ruc: Optional[str] = None) -> Dict[str, Any]:
+        """Catálogos disponibles (``GET /catalogos``): trae ``catalogos`` y ``nota``."""
+        return self._c._get("/catalogos", ruc=self._c._ruc(ruc))
+
+    def consultar(self, nombre: str, q: Optional[str] = None, ruc: Optional[str] = None) -> Dict[str, Any]:
+        """Filas de un catálogo (``GET /catalogos/{nombre}``).
+
+        ``nombre``: el nombre (``"unidades"``) o el número SUNAT (``"03"``).
+        ``q`` filtra por código o descripción. Con ``ruc`` se lee el catálogo
+        de ese RUC: usa solo las filas con ``activo: True``.
+        Devuelve ``catalogo``, ``total`` y ``datos``.
+        """
+        ruta = "/catalogos/" + self._c._segmento(nombre)
+        return self._c._get(ruta, ruc=self._c._ruc(ruc), query={"q": q})

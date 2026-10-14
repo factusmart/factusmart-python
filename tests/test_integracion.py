@@ -1,4 +1,4 @@
-"""Pruebas obligatorias 1-7 contra el API LOCAL (nunca contra producción).
+"""Pruebas obligatorias 1-8 (incluidas 5b y 5c) contra el API LOCAL (nunca contra producción).
 
 Configuración por variables de entorno:
 
@@ -8,9 +8,13 @@ Configuración por variables de entorno:
   cuenta se usa el primer RUC activo en modo demo de ``rucs.listar()``)
 - ``FACTUSMART_INTEGRACION=0`` para saltarlas.
 
-Gasta 2 créditos por corrida (boleta + prueba de idempotencia).
+En RUC demo no se cobra crédito, pero hay un tope de 200 operaciones/día por
+cuenta (compartido con los otros SDK). Esta suite hace solo 2 emisiones nuevas
+por corrida: la boleta de la prueba 3 (que la prueba 5 reusa para la
+idempotencia) y la boleta armada con ``comprobantes.calcular`` (prueba 5b).
 """
 
+import json
 import os
 import unittest
 import uuid
@@ -21,6 +25,13 @@ from factusmart import errores
 BASE_URL = os.environ.get("FACTUSMART_TEST_BASE_URL", "https://factusmart.test/api/v1/issuer")
 API_KEY = os.environ.get("FACTUSMART_TEST_API_KEY", "test_apikey_demo_123")
 RUC = os.environ.get("FACTUSMART_TEST_RUC", "20777666555")
+RESULTADO_CASO_COMUN = os.path.join(os.path.dirname(__file__), os.pardir, "resultado_caso_comun.json")
+CASO_COMUN = [
+    {"descripcion": "A", "cantidad": 3, "valor_unitario": 10.555, "afectacion": "10"},
+    {"descripcion": "B", "cantidad": 2, "valor_unitario": 5, "afectacion": "20"},
+    {"descripcion": "C", "cantidad": 1, "valor_unitario": 7.1, "afectacion": "30"},
+    {"descripcion": "D", "cantidad": 1, "valor_unitario": 100, "afectacion": "40"},
+]
 
 if "factusmart.pe" in BASE_URL:
     raise RuntimeError("Las pruebas de integración NO se corren contra producción.")
@@ -44,6 +55,7 @@ class TestIntegracion(unittest.TestCase):
     fs: factusmart.Cliente
     ruc: str
     emitido: dict = {}
+    clave_emitido: str = ""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -74,8 +86,10 @@ class TestIntegracion(unittest.TestCase):
         self.assertIsInstance(r["creditos_disponibles"], int)
 
     def test_3_emitir_boleta(self) -> None:
-        r = self.fs.comprobantes.emitir(_boleta())
+        clave = "sdk-python-" + str(uuid.uuid4())
+        r = self.fs.comprobantes.emitir(_boleta(), idempotency_key=clave)
         TestIntegracion.emitido = r
+        TestIntegracion.clave_emitido = clave
         self.assertTrue(r["success"])
         self.assertTrue(r["aceptado_por_sunat"], r.get("sunat"))
         self.assertEqual(r["entorno"], "prueba")
@@ -97,14 +111,46 @@ class TestIntegracion(unittest.TestCase):
         self.assertTrue(pdf.startswith(b"%PDF"), pdf[:20])
 
     def test_5_idempotencia(self) -> None:
-        clave = "sdk-python-" + str(uuid.uuid4())
-        antes = self.fs.cuenta.saldo()["creditos_disponibles"]
-        r1 = self.fs.comprobantes.emitir(_boleta(), idempotency_key=clave)
+        # Reusa la clave de la prueba 3 para no gastar otra emisión del tope diario.
+        if self.emitido and self.clave_emitido:
+            clave, r1 = self.clave_emitido, self.emitido
+        else:
+            clave = "sdk-python-" + str(uuid.uuid4())
+            r1 = self.fs.comprobantes.emitir(_boleta(), idempotency_key=clave)
         r2 = self.fs.comprobantes.emitir(_boleta(), idempotency_key=clave)
-        despues = self.fs.cuenta.saldo()["creditos_disponibles"]
         self.assertEqual(r1["external_id"], r2["external_id"])
         self.assertEqual(r1["serie_numero"], r2["serie_numero"])
-        self.assertEqual(antes - despues, 1, "el saldo debe bajar solo 1 (antes={}, después={})".format(antes, despues))
+        # En demo no se cobra nada: no se mira el saldo, solo que la repetición no cobre.
+        if "credito_cobrado" in r2:
+            self.assertIs(r2["credito_cobrado"], False, r2)
+
+    def test_5b_calcular_en_servidor_y_emitir(self) -> None:
+        with open(RESULTADO_CASO_COMUN, encoding="utf-8") as f:
+            esperado = json.load(f)
+        r = self.fs.comprobantes.calcular(CASO_COMUN)
+        self.assertTrue(r["success"])
+        self.assertEqual(r["items"], esperado["items"])
+        self.assertEqual(r["totales"], esperado["totales"])
+        # La exportación (40) no va en boleta: se emite una boleta con precio con IGV.
+        calc = self.fs.comprobantes.calcular(
+            [{"codigo_interno": "SDK-PY-002", "descripcion": "Menu SDK Python", "cantidad": 3, "precio_unitario": 10, "afectacion": "10", "unidad_de_medida": "ZZ"}]
+        )
+        self.assertEqual(calc["totales"]["total_venta"], 30)
+        e = self.fs.comprobantes.emitir(
+            {"codigo_tipo_documento": "03", "datos_del_cliente_o_receptor": CLIENTE_DNI, "items": calc["items"], "totales": calc["totales"]}
+        )
+        self.assertTrue(e["aceptado_por_sunat"], e.get("sunat"))
+        self.assertEqual(e["entorno"], "prueba")
+
+    def test_5c_catalogos(self) -> None:
+        lista = self.fs.catalogos.listar()
+        self.assertIsInstance(lista["catalogos"], list)
+        self.assertGreater(len(lista["catalogos"]), 0)
+        afectacion = self.fs.catalogos.consultar("07")
+        codigos = [fila.get("codigo") for fila in afectacion["datos"]]
+        self.assertIn("10", codigos)
+        filtrado = self.fs.catalogos.consultar("unidades", q="kilo")
+        self.assertTrue(all("codigo" in fila for fila in filtrado["datos"]))
 
     def test_6_api_key_falsa(self) -> None:
         falso = factusmart.Cliente(api_key="clave_que_no_existe", base_url=BASE_URL, ruc=self.ruc, verificar_ssl=False)

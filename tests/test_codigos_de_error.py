@@ -130,5 +130,71 @@ class TestReintentableDelServidor(unittest.TestCase):
                     self.assertIs(ctx.exception.reintentable, True)
 
 
+LIMITE_DIARIO = {
+    "success": False,
+    "message": "Llegaste al tope de 200 pruebas diarias de este RUC demo. Se reinicia a medianoche (hora de Lima).",
+    "codigo": "LIMITE_PRUEBAS_DIARIO",
+    "reintentable": False,
+}
+
+
+class TestReintentableFalseManda(unittest.TestCase):
+    """5d: ``"reintentable": false`` en el cuerpo nunca se reintenta, sea cual sea el HTTP."""
+
+    def test_429_limite_pruebas_diario_una_sola_peticion(self) -> None:
+        c, t, esperas = cliente([(429, LIMITE_DIARIO, {"retry-after": "5"}), (200, EMISION_OK)])
+        with self.assertRaises(errores.LimiteDePeticiones) as ctx:
+            c.comprobantes.emitir(DATOS_BOLETA)
+        e = ctx.exception
+        self.assertIs(type(e), errores.LimiteDePeticiones)
+        self.assertEqual(len(t.peticiones), 1)
+        self.assertEqual(esperas, [])
+        self.assertEqual(e.status, 429)
+        self.assertEqual(e.codigo, factusmart.CodigoDeError.LIMITE_PRUEBAS_DIARIO)
+        self.assertIs(e.reintentable, False)
+
+    def test_429_limite_pruebas_diario_en_get_tampoco_se_reintenta(self) -> None:
+        c, t, esperas = cliente([(429, LIMITE_DIARIO), (200, {"success": True})])
+        with self.assertRaises(errores.LimiteDePeticiones):
+            c.ping()
+        self.assertEqual(len(t.peticiones), 1)
+        self.assertEqual(esperas, [])
+
+    def test_5xx_y_409_con_reintentable_false_no_se_reintentan(self) -> None:
+        for status in (409, 500, 502, 503, 504):
+            with self.subTest(status=status):
+                cuerpo = {"success": False, "message": "x", "codigo": "CONFLICTO", "reintentable": False}
+                c, t, esperas = cliente([(status, cuerpo), (200, EMISION_OK)])
+                with self.assertRaises(errores.FactuSmartError) as ctx:
+                    c.comprobantes.emitir(DATOS_BOLETA)
+                self.assertEqual(len(t.peticiones), 1)
+                self.assertEqual(esperas, [])
+                self.assertIs(ctx.exception.reintentable, False)
+
+    def test_429_reintentable_true_si_se_reintenta(self) -> None:
+        cuerpo = {"success": False, "message": "Demasiadas peticiones.", "codigo": "LIMITE_PETICIONES", "reintentable": True}
+        c, t, esperas = cliente([(429, cuerpo), (429, cuerpo), (200, {"success": True})])
+        self.assertEqual(c.cuenta.saldo(), {"success": True})
+        self.assertEqual(len(t.peticiones), 3)
+        self.assertEqual(esperas, [1.0, 2.0])
+
+    def test_429_sin_reintentable_usa_la_regla_por_http(self) -> None:
+        c, t, _ = cliente([(429, {"success": False, "message": "Too Many Attempts."}), (200, {"success": True})])
+        c.ping()
+        self.assertEqual(len(t.peticiones), 2)
+
+    def test_codigos_nuevos_en_catalogo(self) -> None:
+        self.assertEqual(factusmart.CodigoDeError.ANULACION_MIXTA, "ANULACION_MIXTA")
+        self.assertEqual(factusmart.CodigoDeError.LLAVE_DE_PRUEBA_EN_PRODUCCION, "LLAVE_DE_PRUEBA_EN_PRODUCCION")
+
+    def test_anulacion_mixta_es_error_de_validacion(self) -> None:
+        cuerpo = {"success": False, "message": "No mezcles facturas y boletas.", "codigo": "ANULACION_MIXTA", "reintentable": False}
+        c, t, _ = cliente([(422, cuerpo)])
+        with self.assertRaises(errores.ErrorDeValidacion) as ctx:
+            c.anulaciones.crear({"documentos": []})
+        self.assertEqual(ctx.exception.codigo, "ANULACION_MIXTA")
+        self.assertEqual(len(t.peticiones), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
