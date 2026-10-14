@@ -752,6 +752,10 @@ paths:
         se genera (incluso en estado `01`); el CDR solo cuando SUNAT respondió.
         Si el comprobante o el archivo (PDF, XML o CDR) no existen, responde `404` JSON con
         `codigo: NO_ENCONTRADO` (si falta el CDR, consulta a SUNAT con `/consultar-sunat` y reintenta).
+
+        Si tu cuenta tiene varios RUC, indica el emisor con `?ruc=20123456789` (o el header `X-RUC`);
+        sin él responde `422 RUC_REQUERIDO`. Basta el header `X-API-Key`: no hace falta un header
+        `Accept` especial (la respuesta trae el `Content-Type` del archivo; los errores siempre en JSON).
       parameters:
         - $ref: '#/components/parameters/ExternalId'
         - name: type
@@ -1514,6 +1518,13 @@ paths:
 
         El código de producto SUNAT (UNSPSC, catálogo 25) no está: envía el código de 8 dígitos en
         `codigo_producto_sunat` del ítem si lo necesitas.
+
+        Acepta `?ruc=` / `X-RUC` como el resto de endpoints, pero la lista es la misma para todos los
+        RUC: el RUC solo cambia las filas de `GET /catalogos/{nombre}`. Si lo mandas, debe ser de tu
+        cuenta (si no, `403 RUC_NO_AUTORIZADO`).
+      parameters:
+        - $ref: '#/components/parameters/RucQuery'
+        - $ref: '#/components/parameters/XRucHeader'
       responses:
         '200':
           description: Lista de catálogos.
@@ -2220,11 +2231,15 @@ components:
         fecha_de_emision:
           type: string
           format: date
-          description: Fecha de emisión (YYYY-MM-DD). Debe ser la fecha real (hoy, hora de Perú).
+          description: |
+            Fecha de emisión (YYYY-MM-DD) **en hora de Perú** (zona `America/Lima`, UTC-5, sin horario
+            de verano). Debe ser la fecha real de hoy en Perú. Ojo: un servidor en UTC que use su fecha
+            local después de las 19:00 de Perú mandaría la fecha de mañana. Es obligatoria: el API no
+            la completa si falta (la emisión se rechaza con `422` y no se cobra).
         hora_de_emision:
           type: string
           pattern: '^\d{2}:\d{2}:\d{2}$'
-          description: Hora de emisión (HH:MM:SS).
+          description: Hora de emisión (HH:MM:SS, 24 h) en hora de Perú (`America/Lima`). Obligatoria; el API no la completa.
         fecha_de_vencimiento:
           type: string
           format: date
@@ -2381,7 +2396,7 @@ components:
         nombre_secundario: { type: string }
         codigo_tipo_item: { type: string, default: "01" }
         codigo_producto_sunat: { type: string }
-        unidad_de_medida: { type: string, description: 'Catálogo 03 (NIU bienes, ZZ servicios, KGM...).' }
+        unidad_de_medida: { type: string, description: 'Catálogo 03: `NIU` para bienes/productos, `ZZ` para servicios (`KGM`, `LTR`... si vendes por peso o volumen). Lista completa: `GET /catalogos/03`.' }
         cantidad: { type: number }
         valor_unitario: { type: number, description: 'Precio unitario sin IGV.' }
         codigo_tipo_precio: { type: string, description: '01 precio unitario, 02 valor referencial (gratuitas).' }
@@ -2918,7 +2933,7 @@ components:
           type: string
           default: NIU
           pattern: '^[A-Za-z0-9]{1,5}$'
-          description: Código SUNAT (`NIU` bienes, `ZZ` servicios, `KGM`…). Ver `GET /catalogos/unidades`.
+          description: Código SUNAT del catálogo 03. `NIU` para bienes/productos, `ZZ` para servicios (`KGM`, `LTR`… si vendes por peso o volumen). Lista completa en `GET /catalogos/03` (o `/catalogos/unidades`).
         codigo_interno: { type: string, description: Se copia tal cual al resultado. }
       oneOf:
         - required: [valor_unitario]
