@@ -157,7 +157,7 @@ y heredan de `FactuSmartError`, que trae:
 | 403 | `RucNoAutorizado` |
 | 404 | `NoEncontrado` |
 | 422 | `ErrorDeValidacion` |
-| 429 (o 500 "Too Many Attempts.") | `LimiteDePeticiones` (con `segundos_de_espera` si se pudo leer) |
+| 429 | `LimiteDePeticiones` (con `segundos_de_espera` si se pudo leer) |
 | otros / red | `FactuSmartError` |
 
 ```python
