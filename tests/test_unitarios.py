@@ -376,6 +376,140 @@ class TestHerramientas(unittest.TestCase):
         c.catalogos.listar()
         self.assertTrue(t.peticiones[0]["url"].endswith("/catalogos"))
 
+    def test_buscar_producto_sunat(self) -> None:
+        resp = {"success": True, "catalogo_sunat": "25", "total": 1, "hay_mas": False, "datos": [{"codigo": "43211503"}]}
+        c, t, _ = cliente([(200, resp), (200, resp), (200, resp)])
+        self.assertEqual(c.catalogos.buscar_producto_sunat("computador"), resp)
+        c.catalogos.buscar_producto_sunat("4321", limite=50, ruc="20555555555")
+        c.catalogos.buscar_producto_sunat("cafe", limite=5)
+        base = "https://api.test/api/v1/issuer"
+        self.assertEqual(
+            [(p["metodo"], p["url"][len(base):], p["cuerpo"]) for p in t.peticiones],
+            [
+                ("GET", "/catalogos/productos-sunat?ruc=20123456789&q=computador", None),
+                ("GET", "/catalogos/productos-sunat?ruc=20555555555&q=4321&limite=50", None),
+                ("GET", "/catalogos/productos-sunat?ruc=20123456789&q=cafe&limite=5", None),
+            ],
+        )
+
+    def test_buscar_producto_sunat_se_reintenta_como_get(self) -> None:
+        c, t, _ = cliente([(503, ""), (200, {"success": True, "datos": []})])
+        c.catalogos.buscar_producto_sunat("x")
+        self.assertEqual(len(t.peticiones), 2)
+
+
+class TestEstablecimientos(unittest.TestCase):
+    BASE = "https://api.test/api/v1/issuer"
+    DATOS = {"codigo_anexo": "0001", "nombre": "Tienda Miraflores", "direccion": "Av. Larco 345", "ubigeo": "150122"}
+
+    def test_listar_get_con_ruc_en_query(self) -> None:
+        resp = {"success": True, "establecimientos": [{"codigo_anexo": "0000", "predeterminado": True}]}
+        c, t, _ = cliente([(200, resp), (200, resp)])
+        self.assertEqual(c.establecimientos.listar(), resp)
+        c.establecimientos.listar(ruc="20555555555")
+        self.assertEqual(
+            [(p["metodo"], p["url"][len(self.BASE):], p["cuerpo"]) for p in t.peticiones],
+            [("GET", "/establecimientos?ruc=20123456789", None), ("GET", "/establecimientos?ruc=20555555555", None)],
+        )
+
+    def test_listar_se_reintenta_como_get(self) -> None:
+        c, t, _ = cliente([(503, ""), (200, {"success": True, "establecimientos": []})])
+        c.establecimientos.listar()
+        self.assertEqual(len(t.peticiones), 2)
+
+    def test_crear_post_con_ruc_en_el_cuerpo_sin_mutar_datos(self) -> None:
+        original = dict(self.DATOS)
+        c, t, _ = cliente([(201, {"success": True, "establecimiento": {"id": 2}}), (201, {}), (201, {})])
+        self.assertEqual(c.establecimientos.crear(self.DATOS), {"success": True, "establecimiento": {"id": 2}})
+        c.establecimientos.crear(self.DATOS, ruc="20555555555")
+        c.establecimientos.crear(dict(self.DATOS, ruc="20999999999"), ruc="20555555555")
+        self.assertEqual(self.DATOS, original)
+        for p in t.peticiones:
+            self.assertEqual((p["metodo"], p["url"]), ("POST", self.BASE + "/establecimientos"))
+            self.assertNotIn("Idempotency-Key", p["headers"])
+        self.assertEqual(t.peticiones[0]["cuerpo"], dict(self.DATOS, ruc="20123456789"))
+        self.assertEqual(t.peticiones[1]["cuerpo"]["ruc"], "20555555555")
+        self.assertEqual(t.peticiones[2]["cuerpo"]["ruc"], "20999999999")  # el de datos manda
+
+    def test_crear_nunca_se_reintenta(self) -> None:
+        fallos = [
+            (503, ""),
+            (502, ""),
+            (429, {"message": "x"}),
+            urllib.error.URLError("x"),
+            (500, {"success": False, "codigo": "ERROR_INTERNO", "reintentable": True}),
+        ]
+        for fallo in fallos:
+            with self.subTest(fallo=repr(fallo)):
+                c, t, esperas = cliente([fallo, (201, {"success": True})])
+                with self.assertRaises(errores.FactuSmartError):
+                    c.establecimientos.crear(self.DATOS)
+                self.assertEqual(len(t.peticiones), 1)
+                self.assertEqual(esperas, [])
+
+    def test_crear_limite_del_plan(self) -> None:
+        cuerpo = {
+            "success": False,
+            "message": "Ha alcanzado el limite de 1 sucursal(es).",
+            "codigo": "LIMITE_ESTABLECIMIENTOS",
+            "reintentable": False,
+        }
+        c, t, _ = cliente([(403, cuerpo)])
+        with self.assertRaises(errores.RucNoAutorizado) as ctx:
+            c.establecimientos.crear(self.DATOS)
+        self.assertEqual(ctx.exception.codigo, factusmart.CodigoDeError.LIMITE_ESTABLECIMIENTOS)
+        self.assertEqual(len(t.peticiones), 1)
+
+
+class TestFormatoPdf(unittest.TestCase):
+    BASE = "https://api.test/api/v1/issuer"
+
+    def test_formato_va_en_la_query_solo_si_se_pide(self) -> None:
+        c, t, _ = cliente([(200, b"%PDF-1.4")] * 4)
+        c.comprobantes.descargar("id1", "pdf")
+        c.comprobantes.descargar("id1", "pdf", formato="ticket")
+        c.comprobantes.descargar("id1", "PDF", formato="TICKET58")
+        c.comprobantes.descargar("id1", "xml")
+        self.assertEqual(
+            [p["url"][len(self.BASE):] for p in t.peticiones],
+            [
+                "/documents/id1/pdf?ruc=20123456789",
+                "/documents/id1/pdf?ruc=20123456789&formato=ticket",
+                "/documents/id1/pdf?ruc=20123456789&formato=ticket58",
+                "/documents/id1/xml?ruc=20123456789",
+            ],
+        )
+        self.assertTrue(all(p["metodo"] == "GET" for p in t.peticiones))
+
+    def test_todos_los_formatos_validos(self) -> None:
+        formatos = ["a4", "a5", "ticket", "ticket80", "ticket58", "ticket50"]
+        c, t, _ = cliente([(200, b"%PDF")] * len(formatos))
+        for f in formatos:
+            c.comprobantes.descargar("id1", "pdf", formato=f)
+        enviados = [urllib.parse.parse_qs(urllib.parse.urlparse(p["url"]).query)["formato"][0] for p in t.peticiones]
+        self.assertEqual(enviados, formatos)
+
+    def _assert_422_local(self, llamar) -> None:
+        c, t, _ = cliente([])
+        with self.assertRaises(errores.ErrorDeValidacion) as ctx:
+            llamar(c)
+        e = ctx.exception
+        self.assertEqual(e.status, 422)
+        self.assertEqual(e.codigo, factusmart.CodigoDeError.DATOS_INVALIDOS)
+        self.assertIs(e.reintentable, False)
+        self.assertTrue(e.campos.get("formato"))
+        self.assertEqual(t.peticiones, [])
+
+    def test_formato_con_xml_o_cdr_lanza_sin_peticion(self) -> None:
+        for tipo in ("xml", "cdr"):
+            with self.subTest(tipo):
+                self._assert_422_local(lambda c: c.comprobantes.descargar("id1", tipo, formato="ticket"))
+
+    def test_formato_invalido_lanza_sin_peticion(self) -> None:
+        for f in ("ticket_58", "a3", "", "80mm"):
+            with self.subTest(f):
+                self._assert_422_local(lambda c: c.comprobantes.descargar("id1", "pdf", formato=f))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías, RUCs y catálogos.
+"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías, RUCs, anexos y catálogos.
 
 Los datos (payload y respuesta) van tal cual los define el API, con las claves
 en español. El SDK no las traduce.
@@ -9,10 +9,36 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Union
 if TYPE_CHECKING:  # pragma: no cover
     from .cliente import Cliente
 
-__all__ = ["Cuenta", "Series", "Comprobantes", "Anulaciones", "Guias", "Rucs", "Catalogos", "TIPOS_DE_ARCHIVO"]
+__all__ = [
+    "Cuenta",
+    "Series",
+    "Comprobantes",
+    "Anulaciones",
+    "Guias",
+    "Rucs",
+    "Establecimientos",
+    "Catalogos",
+    "TIPOS_DE_ARCHIVO",
+    "FORMATOS_PDF",
+]
 
 #: Archivos que se pueden descargar de un comprobante.
 TIPOS_DE_ARCHIVO = ("pdf", "xml", "cdr")
+
+#: Tamaños del PDF (``formato``): ``ticket`` es lo mismo que ``ticket80`` (80 mm).
+FORMATOS_PDF = ("a4", "a5", "ticket", "ticket80", "ticket58", "ticket50")
+
+
+def _formato_invalido(mensaje: str) -> Exception:
+    from .errores import CodigoDeError, ErrorDeValidacion
+
+    return ErrorDeValidacion(
+        mensaje,
+        status=422,
+        codigo=CodigoDeError.DATOS_INVALIDOS,
+        reintentable=False,
+        campos={"formato": [mensaje]},
+    )
 
 
 class _Recurso:
@@ -86,13 +112,35 @@ class Comprobantes(_Recurso):
         """Estado guardado del comprobante y sus links (``GET /documents/{external_id}``)."""
         return self._c._get("/documents/" + self._c._segmento(external_id), ruc=self._c._ruc(ruc))
 
-    def descargar(self, external_id: str, tipo: str, ruc: Optional[str] = None) -> bytes:
-        """Descarga el ``pdf``, ``xml`` o ``cdr`` del comprobante. Devuelve ``bytes``."""
+    def descargar(
+        self,
+        external_id: str,
+        tipo: str,
+        ruc: Optional[str] = None,
+        formato: Optional[str] = None,
+    ) -> bytes:
+        """Descarga el ``pdf``, ``xml`` o ``cdr`` del comprobante. Devuelve ``bytes``.
+
+        ``formato`` (solo para ``pdf``): ``a4``, ``a5``, ``ticket`` (= ``ticket80``,
+        80 mm), ``ticket80``, ``ticket58`` o ``ticket50``. Sin ``formato`` llega
+        el A4 de siempre. ``formato`` con ``xml``/``cdr`` o un valor fuera de la
+        lista lanza :class:`~factusmart.ErrorDeValidacion` sin hacer la petición.
+        """
         tipo = str(tipo).lower()
         if tipo not in TIPOS_DE_ARCHIVO:
             raise ValueError("tipo debe ser 'pdf', 'xml' o 'cdr' (recibido: {!r}).".format(tipo))
+        query: Dict[str, Any] = {}
+        if formato is not None:
+            if tipo != "pdf":
+                raise _formato_invalido("formato solo aplica al PDF (tipo recibido: {!r}).".format(tipo))
+            valor = str(formato).lower()
+            if valor not in FORMATOS_PDF:
+                raise _formato_invalido(
+                    "formato debe ser uno de: {} (recibido: {!r}).".format(", ".join(FORMATOS_PDF), formato)
+                )
+            query["formato"] = valor
         ruta = "/documents/{}/{}".format(self._c._segmento(external_id), tipo)
-        return self._c._get(ruta, ruc=self._c._ruc(ruc), binario=True)
+        return self._c._get(ruta, ruc=self._c._ruc(ruc), query=query, binario=True)
 
     def reenviar(self, external_id: str, ruc: Optional[str] = None) -> Dict[str, Any]:
         """Reintenta el envío a SUNAT (``POST .../reenviar``). Nunca se reintenta solo."""
@@ -210,6 +258,32 @@ class Rucs(_Recurso):
         return self._c._peticion("PATCH", ruta, cuerpo={"activo": bool(activo)})
 
 
+class Establecimientos(_Recurso):
+    """Locales (anexos SUNAT) del RUC. No consumen crédito."""
+
+    def listar(self, ruc: Optional[str] = None) -> Dict[str, Any]:
+        """Locales del RUC con su ``codigo_anexo`` y series (``GET /establecimientos``).
+
+        Trae ``success`` y ``establecimientos``; ``predeterminado: True`` marca el
+        local desde donde emite :meth:`Comprobantes.emitir` si no mandas
+        ``codigo_anexo``. Es una consulta: se reintenta como cualquier GET.
+        """
+        return self._c._get("/establecimientos", ruc=self._c._ruc(ruc))
+
+    def crear(self, datos: Mapping[str, Any], ruc: Optional[str] = None) -> Dict[str, Any]:
+        """Crea un local (``POST /establecimientos``). Nunca se reintenta sola.
+
+        ``datos``: ``codigo_anexo`` (4 dígitos, regístralo antes en SUNAT),
+        ``nombre``, ``direccion``, ``ubigeo`` y opcionales ``telefono``,
+        ``email``, ``crear_series_por_defecto`` (``True`` por defecto) y
+        ``series`` (``[{"codigo_tipo_documento": "03", "serie": "B002"}]``).
+        Si el plan no admite más locales: :class:`~factusmart.RucNoAutorizado`
+        con ``codigo`` ``LIMITE_ESTABLECIMIENTOS``. Editar o eliminar un local
+        solo desde el sistema web.
+        """
+        return self._c._peticion("POST", "/establecimientos", cuerpo=self._c._cuerpo_con_ruc(datos, ruc))
+
+
 class Catalogos(_Recurso):
     """Catálogos SUNAT (unidades, afectación del IGV, monedas…). No consumen crédito."""
 
@@ -227,3 +301,23 @@ class Catalogos(_Recurso):
         """
         ruta = "/catalogos/" + self._c._segmento(nombre)
         return self._c._get(ruta, ruc=self._c._ruc(ruc), query={"q": q})
+
+    def buscar_producto_sunat(
+        self,
+        q: str,
+        limite: Optional[int] = None,
+        ruc: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Busca el código de producto SUNAT (catálogo 25) (``GET /catalogos/productos-sunat``).
+
+        ``q``: código (exacto o prefijo, ``"4321"``) o texto (sin importar
+        tildes, ``"computador"``). ``limite``: cuántas filas (máx. 50).
+        Devuelve ``catalogo``, ``catalogo_sunat`` (``"25"``), ``q``, ``total``,
+        ``hay_mas`` y ``datos`` (``[{"codigo": ..., "descripcion": ...}]``).
+        Es una consulta: se reintenta como cualquier GET.
+        """
+        return self._c._get(
+            "/catalogos/productos-sunat",
+            ruc=self._c._ruc(ruc),
+            query={"q": q, "limite": limite},
+        )

@@ -67,7 +67,7 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.comprobantes.emitir(datos, ruc=None, idempotency_key=None)` | `POST /documents` | dict |
 | `fs.comprobantes.listar(filtros=None, ruc=None)` | `GET /documents` | dict |
 | `fs.comprobantes.consultar(external_id, ruc=None)` | `GET /documents/{id}` | dict |
-| `fs.comprobantes.descargar(external_id, tipo, ruc=None)` | `GET /documents/{id}/{pdf\|xml\|cdr}` | **bytes** |
+| `fs.comprobantes.descargar(external_id, tipo, ruc=None, formato=None)` | `GET /documents/{id}/{pdf\|xml\|cdr}` (`?formato=` solo en pdf) | **bytes** |
 | `fs.comprobantes.reenviar(external_id, ruc=None)` | `POST /documents/{id}/reenviar` | dict |
 | `fs.comprobantes.consultar_sunat(external_id, ruc=None)` | `POST /documents/{id}/consultar-sunat` | dict |
 | `fs.comprobantes.historial(external_id, ruc=None)` | `GET /documents/{id}/historial` | dict |
@@ -81,6 +81,9 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.comprobantes.calcular(items, porcentaje_igv=None)` | `POST /calcular` | dict (`success`, `items`, `totales`) |
 | `fs.catalogos.listar(ruc=None)` | `GET /catalogos` | dict (`catalogos`, `nota`) |
 | `fs.catalogos.consultar(nombre, q=None, ruc=None)` | `GET /catalogos/{nombre}` | dict (`catalogo`, `total`, `datos`) |
+| `fs.catalogos.buscar_producto_sunat(q, limite=None, ruc=None)` | `GET /catalogos/productos-sunat` | dict (`catalogo_sunat`, `total`, `hay_mas`, `datos`) |
+| `fs.establecimientos.listar(ruc=None)` | `GET /establecimientos` | dict (`success`, `establecimientos`) |
+| `fs.establecimientos.crear(datos, ruc=None)` | `POST /establecimientos` | dict (`success`, `message`, `establecimiento`) |
 
 Filtros de `comprobantes.listar`: `estado`, `desde`, `hasta` (YYYY-MM-DD),
 `limite` (1 a 100) y `antes_de` (pasa el `siguiente_cursor` de la página
@@ -96,6 +99,55 @@ Guardar el PDF:
 with open("comprobante.pdf", "wb") as f:
     f.write(fs.comprobantes.descargar(r["external_id"], "pdf"))
 ```
+
+### PDF en ticket u otro tamaño
+
+```python
+ticket = fs.comprobantes.descargar(r["external_id"], "pdf", formato="ticket")  # 80 mm
+with open("ticket.pdf", "wb") as f:
+    f.write(ticket)
+```
+
+`formato`: `a4`, `a5`, `ticket` (= `ticket80`), `ticket80`, `ticket58`,
+`ticket50`. Sin `formato` llega el A4 de siempre. Es el mismo PDF que imprime
+el sistema web en ese tamaño y no cambia el que recibe tu cliente. Solo sirve
+con `pdf`: con `xml`/`cdr` o un valor que no está en la lista, el SDK lanza
+`ErrorDeValidacion` (`codigo` `DATOS_INVALIDOS`, `campos["formato"]`) sin
+llamar al API.
+
+### Código de producto SUNAT
+
+```python
+r = fs.catalogos.buscar_producto_sunat("computador", limite=10)
+for fila in r["datos"]:
+    print(fila["codigo"], fila["descripcion"])  # 43211503 ...
+```
+
+`q` acepta el código (exacto o los primeros dígitos) o texto sin tildes.
+`limite` máximo 50; `hay_mas: True` indica que hay más resultados.
+
+### Anexos (locales del RUC)
+
+```python
+locales = fs.establecimientos.listar()["establecimientos"]
+for l in locales:
+    print(l["codigo_anexo"], l["nombre"], l["predeterminado"], [s["serie"] for s in l["series"]])
+
+nuevo = fs.establecimientos.crear({
+    "codigo_anexo": "0001",          # regístralo antes en SUNAT (Clave SOL)
+    "nombre": "Tienda Miraflores",
+    "direccion": "Av. Larco 345",
+    "ubigeo": "150122",
+    "series": [{"codigo_tipo_documento": "03", "serie": "B002"}],  # opcional
+})
+# Para emitir desde ese local: "codigo_anexo": "0001" en comprobantes.emitir.
+```
+
+No consumen crédito. `establecimientos.crear` **nunca se reintenta sola** (no
+es idempotente): si falla por red, revisa con `listar()` antes de volver a
+intentarlo. Si el plan del RUC no admite más locales lanza `RucNoAutorizado`
+con `codigo` `LIMITE_ESTABLECIMIENTOS`. Editar o eliminar un local solo se hace
+desde el sistema web.
 
 ### Lo que `comprobantes.emitir` completa por ti
 
@@ -346,6 +398,9 @@ python -m unittest discover -s tests -v
   para saltarlas). Por defecto usa el RUC `20777666555` (demo: no gasta
   créditos). Hace solo 2 emisiones nuevas por corrida (hay un tope de 200
   operaciones/día por cuenta). Se niega a correr contra `factusmart.pe`.
+  La clase `TestIntegracionSinEmitir` (anexos, PDF ticket, código SUNAT) no
+  emite ni crea nada; córrela sola con
+  `python -m unittest tests.test_integracion.TestIntegracionSinEmitir`.
 
 ## Licencia
 

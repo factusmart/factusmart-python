@@ -53,9 +53,12 @@ OPERACIONES: Dict[str, str] = {
     "listRucs": "rucs.listar",
     "createRuc": "rucs.crear",
     "setRucActivation": "rucs.activar",
+    "listEstablishments": "establecimientos.listar",
+    "createEstablishment": "establecimientos.crear",
     "calculateDocument": "comprobantes.calcular",
     "listCatalogs": "catalogos.listar",
     "getCatalog": "catalogos.consultar",
+    "searchSunatProductCodes": "catalogos.buscar_producto_sunat",
     # Webhook: FactuSmart llama a TU servidor; el SDK solo verifica la firma.
     "webhookComprobanteEstado": "verificar_firma_webhook",
 }
@@ -240,7 +243,7 @@ class Cliente:
             self._contexto = ctx
 
         # Imports aquí para evitar ciclos.
-        from .recursos import Anulaciones, Catalogos, Comprobantes, Cuenta, Guias, Rucs, Series
+        from .recursos import Anulaciones, Catalogos, Comprobantes, Cuenta, Establecimientos, Guias, Rucs, Series
 
         self.cuenta = Cuenta(self)
         self.series = Series(self)
@@ -248,6 +251,7 @@ class Cliente:
         self.anulaciones = Anulaciones(self)
         self.guias = Guias(self)
         self.rucs = Rucs(self)
+        self.establecimientos = Establecimientos(self)
         self.catalogos = Catalogos(self)
 
     def __repr__(self) -> str:

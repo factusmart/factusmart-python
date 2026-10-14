@@ -49,6 +49,9 @@ class TestContrato(unittest.TestCase):
             "calculateDocument": "comprobantes.calcular",
             "listCatalogs": "catalogos.listar",
             "getCatalog": "catalogos.consultar",
+            "listEstablishments": "establecimientos.listar",
+            "createEstablishment": "establecimientos.crear",
+            "searchSunatProductCodes": "catalogos.buscar_producto_sunat",
         }
         for op, metodo in esperado.items():
             with self.subTest(op):

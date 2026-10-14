@@ -28,6 +28,17 @@
 - `"reintentable": false` en una respuesta de error manda: no se reintenta
   nunca, aunque el HTTP sea 429/409/5xx. Un `429` con `codigo`
   `LIMITE_PRUEBAS_DIARIO` lanza `LimiteDePeticiones` tras una sola petición.
+- `comprobantes.descargar(id, "pdf", formato="ticket")`: PDF en `a4`, `a5`,
+  `ticket` (= `ticket80`), `ticket80`, `ticket58` o `ticket50`
+  (`?formato=`). Sin `formato` no se manda nada (A4 de siempre). `formato` con
+  `xml`/`cdr` o un valor fuera de la lista lanza `ErrorDeValidacion` (422,
+  `DATOS_INVALIDOS`, `campos["formato"]`) sin hacer la petición.
+- Nuevo recurso `establecimientos` (anexos): `listar(ruc=None)`
+  (`GET /establecimientos`, se reintenta como GET) y `crear(datos, ruc=None)`
+  (`POST /establecimientos`, `ruc` en el cuerpo, nunca se reintenta solo).
+- Nuevo `catalogos.buscar_producto_sunat(q, limite=None, ruc=None)`
+  (`GET /catalogos/productos-sunat`, catálogo SUNAT 25, máx. 50 filas).
+- `CodigoDeError` suma `PDF_NO_GENERADO` y `LIMITE_ESTABLECIMIENTOS`.
 - `CodigoDeError`: nuevos `LIMITE_PRUEBAS_DIARIO`, `ANULACION_MIXTA` y
   `LLAVE_DE_PRUEBA_EN_PRODUCCION`.
 - `anulaciones.crear` documenta que también anula boletas (resumen diario) y

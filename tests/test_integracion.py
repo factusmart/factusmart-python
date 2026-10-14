@@ -1,4 +1,4 @@
-"""Pruebas obligatorias 1-8 (incluidas 5b y 5c) contra el API LOCAL (nunca contra producción).
+"""Pruebas obligatorias 1-8 (incluidas 5b y 5c), 10 y 11 contra el API LOCAL (nunca contra producción).
 
 Configuración por variables de entorno:
 
@@ -184,6 +184,61 @@ class TestIntegracion(unittest.TestCase):
         self.assertIs(e.reintentable, False)
         self.assertIsInstance(e.respuesta, dict)
         self.assertEqual(e.mensaje, e.respuesta.get("message"))
+
+
+
+@unittest.skipIf(os.environ.get("FACTUSMART_INTEGRACION") == "0", "FACTUSMART_INTEGRACION=0")
+class TestIntegracionSinEmitir(unittest.TestCase):
+    """Pruebas 10 y 11: anexos y PDF por ``formato``. NO emiten ni crean nada.
+
+    Se apagan con ``FACTUSMART_INTEGRACION=0`` como el resto. Solas (sin
+    emitir nada, aunque la variable no esté definida)::
+
+        python -m unittest tests.test_integracion.TestIntegracionSinEmitir
+
+    ``establecimientos.crear`` solo se prueba sin red (el plan demo limita los locales).
+    """
+
+    fs: factusmart.Cliente
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fs = factusmart.Cliente(api_key=API_KEY, base_url=BASE_URL, ruc=RUC, verificar_ssl=False, max_reintentos=1)
+        try:
+            cls.fs.ping()
+        except errores.FactuSmartError as e:
+            if e.status is None:
+                raise unittest.SkipTest("API local no disponible: {}".format(e))
+            raise
+
+    def test_10_establecimientos_listar(self) -> None:
+        r = self.fs.establecimientos.listar()
+        self.assertTrue(r["success"])
+        self.assertIsInstance(r["establecimientos"], list)
+        self.assertGreaterEqual(len(r["establecimientos"]), 1)
+        local = r["establecimientos"][0]
+        for campo in ("codigo_anexo", "nombre", "predeterminado", "series"):
+            self.assertIn(campo, local)
+
+    def test_11_pdf_ticket58_de_un_comprobante_existente(self) -> None:
+        lista = self.fs.comprobantes.listar({"limite": 1})
+        docs = lista.get("comprobantes") or []
+        if not docs:
+            self.skipTest("El RUC no tiene comprobantes para descargar: {}".format(sorted(lista)))
+        external_id = docs[0]["external_id"]
+        pdf = self.fs.comprobantes.descargar(external_id, "pdf", formato="ticket58")
+        self.assertIsInstance(pdf, bytes)
+        self.assertTrue(pdf.startswith(b"%PDF"), pdf[:40])
+        a4 = self.fs.comprobantes.descargar(external_id, "pdf")
+        self.assertTrue(a4.startswith(b"%PDF"))
+        self.assertNotEqual(pdf, a4)
+
+    def test_12_buscar_producto_sunat(self) -> None:
+        r = self.fs.catalogos.buscar_producto_sunat("computador", limite=10)
+        self.assertTrue(r["success"])
+        self.assertEqual(r["catalogo_sunat"], "25")
+        self.assertLessEqual(len(r["datos"]), 10)
+        self.assertIn("43211503", [fila.get("codigo") for fila in r["datos"]], r)
 
 
 if __name__ == "__main__":

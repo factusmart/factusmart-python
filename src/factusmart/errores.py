@@ -67,6 +67,10 @@ class CodigoDeError:
     #: 403: llave de prueba usada contra un RUC en producción.
     LLAVE_DE_PRUEBA_EN_PRODUCCION = "LLAVE_DE_PRUEBA_EN_PRODUCCION"
     ERROR_INTERNO = "ERROR_INTERNO"
+    #: 500 reintentable: el PDF en el ``formato`` pedido no se pudo generar.
+    PDF_NO_GENERADO = "PDF_NO_GENERADO"
+    #: 403: el plan del RUC no permite más locales (``establecimientos.crear``).
+    LIMITE_ESTABLECIMIENTOS = "LIMITE_ESTABLECIMIENTOS"
 
 
 def _codigo_de(respuesta: Any) -> Optional[str]:
