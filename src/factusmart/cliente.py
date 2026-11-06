@@ -36,6 +36,7 @@ Transporte = Callable[
 
 #: operationId del archivo openapi.yaml -> método del SDK.
 OPERACIONES: Dict[str, str] = {
+    "apiRoot": "raiz",
     "ping": "ping",
     "getAccount": "cuenta.saldo",
     "listSeries": "series.listar",
@@ -59,6 +60,7 @@ OPERACIONES: Dict[str, str] = {
     "listCatalogs": "catalogos.listar",
     "getCatalog": "catalogos.consultar",
     "searchSunatProductCodes": "catalogos.buscar_producto_sunat",
+    "lookupDocument": "consultas.documento",
     # Webhook: FactuSmart llama a TU servidor; el SDK solo verifica la firma.
     "webhookComprobanteEstado": "verificar_firma_webhook",
 }
@@ -243,7 +245,17 @@ class Cliente:
             self._contexto = ctx
 
         # Imports aquí para evitar ciclos.
-        from .recursos import Anulaciones, Catalogos, Comprobantes, Cuenta, Establecimientos, Guias, Rucs, Series
+        from .recursos import (
+            Anulaciones,
+            Catalogos,
+            Comprobantes,
+            Consultas,
+            Cuenta,
+            Establecimientos,
+            Guias,
+            Rucs,
+            Series,
+        )
 
         self.cuenta = Cuenta(self)
         self.series = Series(self)
@@ -253,9 +265,19 @@ class Cliente:
         self.rucs = Rucs(self)
         self.establecimientos = Establecimientos(self)
         self.catalogos = Catalogos(self)
+        self.consultas = Consultas(self)
 
     def __repr__(self) -> str:
         return "Cliente(base_url={!r}, ruc={!r})".format(self.base_url, self.ruc)
+
+    # ------------------------------------------------------------------ raíz
+    def raiz(self) -> Dict[str, Any]:
+        """Raíz del API (``GET /``): confirma que el servicio responde y dónde está la documentación.
+
+        No necesita API key ni RUC y no consume crédito (el SDK manda la llave
+        igual; el API la ignora). Para comprobar tu llave usa :meth:`ping`.
+        """
+        return self._get("/")
 
     # ------------------------------------------------------------------ ping
     def ping(self, ruc: Optional[str] = None) -> Dict[str, Any]:

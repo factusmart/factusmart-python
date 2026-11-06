@@ -71,6 +71,10 @@ class CodigoDeError:
     PDF_NO_GENERADO = "PDF_NO_GENERADO"
     #: 403: el plan del RUC no permite más locales (``establecimientos.crear``).
     LIMITE_ESTABLECIMIENTOS = "LIMITE_ESTABLECIMIENTOS"
+    #: 429 no reintentable: se acabó el cupo de consultas RUC/DNI del periodo (``consultas``).
+    LIMITE_CONSULTAS = "LIMITE_CONSULTAS"
+    #: 503 reintentable: ni SUNAT ni el respaldo respondieron a la consulta RUC/DNI.
+    CONSULTA_NO_DISPONIBLE = "CONSULTA_NO_DISPONIBLE"
 
 
 def _codigo_de(respuesta: Any) -> Optional[str]:
@@ -158,7 +162,9 @@ class LimiteDePeticiones(FactuSmartError):
 
     Mira ``codigo``: con ``LIMITE_PRUEBAS_DIARIO`` (``reintentable=False``) se
     agotó el tope diario de pruebas del RUC demo y no sirve reintentar hasta
-    medianoche de Lima; el SDK lo lanza tras una sola petición.
+    medianoche de Lima; con ``LIMITE_CONSULTAS`` (``reintentable=False``) se
+    acabó el cupo de consultas RUC/DNI hasta ``respuesta["se_renueva"]``. En
+    ambos casos el SDK lo lanza tras una sola petición.
     """
 
     def __init__(

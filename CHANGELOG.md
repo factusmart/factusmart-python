@@ -1,5 +1,19 @@
 # Cambios
 
+## 0.3.0 — 2026-11-06
+
+- Nuevo recurso `consultas` (`GET /consultas/{tipo}/{numero}`):
+  `ruc(numero)`, `dni(numero)` y `documento(tipo, numero)`. Devuelve nombre,
+  dirección, estado, condición, ubigeo, `desde_cache`, `consultas_restantes`,
+  `periodo` y `se_renueva`. No manda RUC emisor y se reintenta como una
+  consulta GET.
+- Nuevos códigos en `CodigoDeError`: `LIMITE_CONSULTAS` (429, no reintentable:
+  se lanza `LimiteDePeticiones` tras una sola petición) y
+  `CONSULTA_NO_DISPONIBLE` (503, reintentable).
+- Nuevo `Cliente.raiz()` (`GET /`, operación `apiRoot`): confirma que el API
+  responde, sin llave ni RUC.
+- `tests/fixtures/openapi.yaml` actualizado a la spec actual.
+
 ## 0.2.0 — 2026-10-14
 
 - Los errores traen `codigo` (identificador estable en MAYÚSCULAS, p. ej.

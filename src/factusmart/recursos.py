@@ -1,4 +1,4 @@
-"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías, RUCs, anexos y catálogos.
+"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías, RUCs, anexos, catálogos y consultas RUC/DNI.
 
 Los datos (payload y respuesta) van tal cual los define el API, con las claves
 en español. El SDK no las traduce.
@@ -18,12 +18,17 @@ __all__ = [
     "Rucs",
     "Establecimientos",
     "Catalogos",
+    "Consultas",
+    "TIPOS_DE_CONSULTA",
     "TIPOS_DE_ARCHIVO",
     "FORMATOS_PDF",
 ]
 
 #: Archivos que se pueden descargar de un comprobante.
 TIPOS_DE_ARCHIVO = ("pdf", "xml", "cdr")
+
+#: Documentos que se pueden consultar con :meth:`Consultas.documento`.
+TIPOS_DE_CONSULTA = ("ruc", "dni")
 
 #: Tamaños del PDF (``formato``): ``ticket`` es lo mismo que ``ticket80`` (80 mm).
 FORMATOS_PDF = ("a4", "a5", "ticket", "ticket80", "ticket58", "ticket50")
@@ -324,3 +329,39 @@ class Catalogos(_Recurso):
             ruc=self._c._ruc(ruc),
             query={"q": q, "limite": limite, "nivel": (nivel or "").strip() or None},
         )
+
+
+class Consultas(_Recurso):
+    """Consulta de RUC o DNI (``GET /consultas/{tipo}/{numero}``).
+
+    No emite, no gasta créditos y **no lleva RUC emisor** (ni ``X-RUC`` ni
+    ``?ruc=``). Descuenta de un cupo de consultas por cuenta (aparte de los
+    créditos); repetir un número de los últimos 30 días responde con
+    ``desde_cache: True`` y no descuenta.
+
+    Devuelve ``success``, ``tipo``, ``numero``, ``nombre``, ``direccion``,
+    ``estado``, ``condicion``, ``ubigeo`` (estos cuatro pueden ser ``None``),
+    ``desde_cache``, ``consultas_restantes``, ``periodo`` (``"mes"`` o
+    ``"dia"``) y ``se_renueva`` (``"YYYY-MM-DD"``).
+
+    Errores: ``ErrorDeValidacion`` (422 ``DATOS_INVALIDOS``), ``NoEncontrado``
+    (404 ``NO_ENCONTRADO``), ``LimiteDePeticiones`` con ``codigo``
+    ``LIMITE_CONSULTAS`` (429, **no** se reintenta: se acabó el cupo hasta
+    ``se_renueva``) o ``LIMITE_PETICIONES`` (429, se reintenta), y
+    ``CONSULTA_NO_DISPONIBLE`` (503, se reintenta).
+    """
+
+    def documento(self, tipo: str, numero: str) -> Dict[str, Any]:
+        """Consulta un documento de tipo ``"ruc"`` o ``"dni"``."""
+        ruta = "/consultas/{}/{}".format(
+            self._c._segmento(str(tipo).strip().lower()), self._c._segmento(str(numero).strip())
+        )
+        return self._c._get(ruta)
+
+    def ruc(self, numero: str) -> Dict[str, Any]:
+        """Razón social, dirección, estado, condición y ubigeo de un RUC (11 dígitos)."""
+        return self.documento("ruc", numero)
+
+    def dni(self, numero: str) -> Dict[str, Any]:
+        """Nombres completos de un DNI (8 dígitos)."""
+        return self.documento("dni", numero)

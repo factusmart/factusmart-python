@@ -61,6 +61,7 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 
 | Método | Endpoint | Devuelve |
 |---|---|---|
+| `fs.raiz()` | `GET /` (sin llave ni RUC) | dict (`api`, `docs`, `estado`) |
 | `fs.ping(ruc=None)` | `GET /ping` | dict |
 | `fs.cuenta.saldo()` | `GET /account` | dict |
 | `fs.series.listar(ruc=None)` | `GET /series` | dict |
@@ -82,6 +83,7 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.catalogos.listar(ruc=None)` | `GET /catalogos` | dict (`catalogos`, `nota`) |
 | `fs.catalogos.consultar(nombre, q=None, ruc=None)` | `GET /catalogos/{nombre}` | dict (`catalogo`, `total`, `datos`) |
 | `fs.catalogos.buscar_producto_sunat(q, limite=None, nivel=None, ruc=None)` | `GET /catalogos/productos-sunat` | dict (`catalogo_sunat`, `total`, `hay_mas`, `datos`) |
+| `fs.consultas.ruc(numero)` / `fs.consultas.dni(numero)` / `fs.consultas.documento(tipo, numero)` | `GET /consultas/{ruc\|dni}/{numero}` (sin RUC emisor) | dict (`nombre`, `direccion`, `consultas_restantes`…) |
 | `fs.establecimientos.listar(ruc=None)` | `GET /establecimientos` | dict (`success`, `establecimientos`) |
 | `fs.establecimientos.crear(datos, ruc=None)` | `POST /establecimientos` | dict (`success`, `message`, `establecimiento`) |
 
@@ -125,6 +127,21 @@ for fila in r["datos"]:
 
 `q` acepta el código (exacto o los primeros dígitos) o texto sin tildes.
 `limite` máximo 50; `hay_mas: True` indica que hay más resultados.
+
+### Consultar un RUC o DNI
+
+```python
+r = fs.consultas.ruc("20131312955")   # o fs.consultas.dni("12345678")
+print(r["nombre"], r["direccion"])     # direccion/estado/condicion/ubigeo pueden ser None
+print(r["consultas_restantes"], r["periodo"], r["se_renueva"])
+```
+
+No emite, no gasta créditos y no lleva RUC emisor. Usa un cupo de consultas
+por cuenta (`periodo` `"mes"` con plan, `"dia"` sin plan); repetir un número de
+los últimos 30 días responde con `desde_cache: True` y no descuenta. Al
+agotarlo se lanza `LimiteDePeticiones` con `codigo` `LIMITE_CONSULTAS` **sin
+reintentar** (vuelve en `e.respuesta["se_renueva"]`). Un número inexistente da
+`NoEncontrado`; uno mal escrito, `ErrorDeValidacion`.
 
 ### Anexos (locales del RUC)
 
@@ -299,6 +316,8 @@ Códigos más comunes (lista completa en la documentación del API y en
 | `SUNAT_NO_DISPONIBLE` | 422 / 5xx | sí | Reintenta más tarde |
 | `LIMITE_PETICIONES` | 429 | sí | Espera `segundos_de_espera` |
 | `LIMITE_PRUEBAS_DIARIO` | 429 | **no** | Tope de 200 pruebas/día del RUC demo; se reinicia a medianoche (Lima) |
+| `LIMITE_CONSULTAS` | 429 | **no** | Se acabó el cupo de consultas RUC/DNI; vuelve en `se_renueva` |
+| `CONSULTA_NO_DISPONIBLE` | 503 | sí | SUNAT y el respaldo no respondieron; reintenta |
 | `ANULACION_MIXTA` | 422 | no | Anula facturas y boletas en peticiones separadas |
 | `LLAVE_DE_PRUEBA_EN_PRODUCCION` | 403 | no | Usa tu llave de producción con un RUC en producción |
 | `ERROR_INTERNO` | 5xx | sí | Reintenta; si persiste, contacta soporte |
@@ -343,7 +362,8 @@ except errores.FactuSmartError as e:
 - **`"reintentable": false` manda:** si la respuesta de error lo trae, no se
   reintenta nunca, aunque el HTTP sea 429, 409 o 5xx. Caso real: `429` con
   `codigo` `LIMITE_PRUEBAS_DIARIO` (tope de 200 operaciones/día en RUCs demo,
-  se reinicia a medianoche de Lima): se lanza `LimiteDePeticiones` tras **una
+  se reinicia a medianoche de Lima) o `LIMITE_CONSULTAS` (cupo de consultas
+  RUC/DNI agotado): se lanza `LimiteDePeticiones` tras **una
   sola** petición, con `e.codigo == "LIMITE_PRUEBAS_DIARIO"` y
   `e.reintentable is False`. Decide por `codigo`, no por la clase. Si el
   servidor no envía `reintentable`, se aplica la regla por HTTP.
