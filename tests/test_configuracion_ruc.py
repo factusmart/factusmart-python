@@ -184,6 +184,156 @@ class TestConfigurarSunat(unittest.TestCase):
         self.assertEqual(len(t.peticiones), 1)
 
 
+PSE_USUARIO = "FURZQQ7F"
+PSE_CLAVE = "379VMR6U"
+AVISO_PSE = (
+    "Con Smart PSE el contribuyente debe designar a Smart PSE como su Proveedor de Servicios "
+    "Electrónicos (PSE) en SUNAT Operaciones en Línea, con su Clave SOL."
+)
+CONFIG_PSE = {
+    "success": True,
+    "ruc": RUC,
+    "nombre": "API TENANT CLEAN SAC",
+    "entorno": "produccion",
+    "certificado": {"instalado": False, "vence": None, "dias_para_vencer": None},
+    "sol": {"configurado": False, "usuario": None},
+    "envio": "pse",
+    "modalidad": "pse",
+    "pse": {"proveedor": "smartpse", "configurado": True, "usuario": "FU*****F"},
+    "listo_para_produccion": True,
+    "faltantes": [],
+    "aviso": AVISO_PSE,
+}
+VERIFICAR_PSE = {
+    "success": True,
+    "ruc": RUC,
+    "listo_para_emitir": True,
+    "entorno": "produccion",
+    "modalidad": "pse",
+    "checks": {
+        "certificado": {"ok": None, "mensaje": "Firma Smart PSE: no hace falta certificado propio."},
+        "sol": {"ok": None, "mensaje": "Sin usuario SOL (recomendado para guías)."},
+        "pse": {"ok": True, "mensaje": "Smart PSE aceptó las credenciales."},
+    },
+}
+
+
+class TestConfigurarSunatPse(unittest.TestCase):
+    def test_cuerpo_exacto_pse(self) -> None:
+        c, t, _ = cliente([(200, CONFIG_PSE)])
+        r = c.rucs.configurar_sunat(
+            RUC, modalidad="pse", pse_usuario=PSE_USUARIO, pse_clave=PSE_CLAVE, entorno="produccion"
+        )
+        p = t.peticiones[0]
+        self.assertEqual(p["metodo"], "PUT")
+        self.assertEqual(p["url"], BASE + "/rucs/20777666555/sunat")
+        self.assertEqual(
+            p["cuerpo"],
+            {"modalidad": "pse", "pse_usuario": PSE_USUARIO, "pse_clave": PSE_CLAVE, "entorno": "produccion"},
+        )
+        _sin_x_ruc(self, p)
+        self.assertEqual(r["modalidad"], "pse")
+        self.assertEqual(r["envio"], "pse")
+        self.assertEqual(r["pse"], {"proveedor": "smartpse", "configurado": True, "usuario": "FU*****F"})
+        self.assertIn("designar a Smart PSE", r["aviso"])
+
+    def test_modalidad_sin_credenciales_y_propio(self) -> None:
+        # Repetir modalidad pse sin credenciales lo permite el API: el SDK no lo bloquea.
+        c, t, _ = cliente([(200, CONFIG_PSE), (200, dict(CONFIG_OK, modalidad="propio", pse=None))])
+        c.rucs.configurar_sunat(RUC, modalidad="pse")
+        r = c.rucs.configurar_sunat(RUC, modalidad="propio")
+        self.assertEqual(t.peticiones[0]["cuerpo"], {"modalidad": "pse"})
+        self.assertEqual(t.peticiones[1]["cuerpo"], {"modalidad": "propio"})
+        self.assertIsNone(r["pse"])
+
+    def test_pse_sin_modalidad_lo_decide_el_api(self) -> None:
+        c, t, _ = cliente([(200, CONFIG_PSE)])
+        c.rucs.configurar_sunat(RUC, pse_usuario=PSE_USUARIO, pse_clave=PSE_CLAVE)
+        self.assertEqual(t.peticiones[0]["cuerpo"], {"pse_usuario": PSE_USUARIO, "pse_clave": PSE_CLAVE})
+
+    def test_entorno_demo_aceptado(self) -> None:
+        c, t, _ = cliente([(200, CONFIG_OK)])
+        c.rucs.configurar_sunat(RUC, entorno="demo")
+        self.assertEqual(t.peticiones[0]["cuerpo"], {"entorno": "demo"})
+        self.assertIn("demo", factusmart.recursos.ENTORNOS)
+
+    def test_validaciones_locales_pse(self) -> None:
+        c, t, _ = cliente([])
+        casos = [
+            dict(pse_usuario=PSE_USUARIO),
+            dict(pse_clave=PSE_CLAVE),
+            dict(modalidad="pse", pse_usuario=PSE_USUARIO),
+            dict(modalidad="pse", pse_clave=PSE_CLAVE),
+            dict(modalidad="otro"),
+            dict(modalidad="PSE"),
+        ]
+        for kw in casos:
+            with self.subTest(kw=repr(sorted(kw.items()))):
+                with self.assertRaises(errores.ErrorDeValidacion) as ctx:
+                    c.rucs.configurar_sunat(RUC, **kw)
+                e = ctx.exception
+                self.assertEqual(e.codigo, "DATOS_INVALIDOS")
+                self.assertNotIn(PSE_CLAVE, str(e) + repr(e.campos))
+        self.assertEqual(t.peticiones, [])
+
+    def test_pse_usuario_sin_clave_senala_el_campo(self) -> None:
+        c, t, _ = cliente([])
+        with self.assertRaises(errores.ErrorDeValidacion) as ctx:
+            c.rucs.configurar_sunat(RUC, modalidad="pse", pse_usuario=PSE_USUARIO)
+        self.assertIn("pse_clave", ctx.exception.campos)
+        self.assertEqual(t.peticiones, [])
+
+    def test_422_no_filtra_pse_clave_ni_clave_sol(self) -> None:
+        eco = {
+            "success": False,
+            "message": "Smart PSE rechazó {} / {} (clave {})".format(PSE_USUARIO, PSE_CLAVE, CLAVE_SOL),
+            "codigo": "DATOS_INVALIDOS",
+            "reintentable": False,
+            "campos": {"pse_clave": ["recibida: " + PSE_CLAVE]},
+            "recibido": {"pse_clave": PSE_CLAVE, "clave_sol": CLAVE_SOL},
+        }
+        c, t, _ = cliente([(422, eco)])
+        with self.assertRaises(errores.ErrorDeValidacion) as ctx:
+            c.rucs.configurar_sunat(
+                RUC,
+                usuario_sol="FACTURA1",
+                clave_sol=CLAVE_SOL,
+                modalidad="pse",
+                pse_usuario=PSE_USUARIO,
+                pse_clave=PSE_CLAVE,
+            )
+        e = ctx.exception
+        todo = " ".join([str(e), repr(e), repr(e.args), repr(e.respuesta), repr(e.campos), e.mensaje])
+        self.assertNotIn(PSE_CLAVE, todo)
+        self.assertNotIn(CLAVE_SOL, todo)
+        self.assertIn("***", e.mensaje)
+        self.assertIn("pse_clave", e.campos)
+        self.assertEqual(len(t.peticiones), 1)
+
+    def test_put_pse_no_se_reintenta_ante_5xx(self) -> None:
+        for status in (500, 502, 503, 504):
+            with self.subTest(status=status):
+                c, t, esperas = cliente([(status, {"success": False, "message": "x " + PSE_CLAVE})])
+                with self.assertRaises(factusmart.FactuSmartError) as ctx:
+                    c.rucs.configurar_sunat(RUC, modalidad="pse", pse_usuario=PSE_USUARIO, pse_clave=PSE_CLAVE)
+                self.assertNotIn(PSE_CLAVE, str(ctx.exception))
+                self.assertEqual(len(t.peticiones), 1)
+                self.assertEqual(esperas, [])
+
+    def test_firma_posicional_intacta(self) -> None:
+        c, t, _ = cliente([(200, CONFIG_OK)])
+        c.rucs.configurar_sunat(RUC, "FACTURA1", CLAVE_SOL, "prueba")
+        self.assertEqual(
+            t.peticiones[0]["cuerpo"], {"usuario_sol": "FACTURA1", "clave_sol": CLAVE_SOL, "entorno": "prueba"}
+        )
+
+    def test_verificar_con_check_pse(self) -> None:
+        c, _, _ = cliente([(200, VERIFICAR_PSE)])
+        r = c.rucs.verificar(RUC)
+        self.assertEqual(r["modalidad"], "pse")
+        self.assertTrue(r["checks"]["pse"]["ok"])
+
+
 class TestVerificarYConfiguracion(unittest.TestCase):
     def test_verificar_post_sin_cuerpo(self) -> None:
         c, t, _ = cliente([(200, VERIFICAR_OK)])
@@ -227,10 +377,10 @@ class TestVerificarYConfiguracion(unittest.TestCase):
         for op, metodo in esperado.items():
             self.assertEqual(factusmart.OPERACIONES.get(op), metodo)
 
-    def test_user_agent_040(self) -> None:
+    def test_user_agent_050(self) -> None:
         c, t, _ = cliente([(200, CONFIG_OK)])
         c.rucs.configuracion(RUC)
-        self.assertEqual(t.peticiones[0]["headers"]["User-Agent"], "factusmart-python/0.4.0")
+        self.assertEqual(t.peticiones[0]["headers"]["User-Agent"], "factusmart-python/0.5.0")
 
 
 if __name__ == "__main__":

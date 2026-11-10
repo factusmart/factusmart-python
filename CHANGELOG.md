@@ -1,5 +1,23 @@
 # Cambios
 
+## 0.5.0 — 2026-11-10
+
+- `rucs.configurar_sunat` acepta `modalidad` (`propio` | `pse`), `pse_usuario`
+  y `pse_clave` (solo por nombre; la firma anterior no cambia). Con
+  `modalidad="pse"` Smart PSE firma y envía por ti, sin certificado propio.
+  Nueva constante `factusmart.recursos.MODALIDADES`.
+- Validación local: `pse_usuario` y `pse_clave` van juntos; `modalidad` debe ser
+  `propio` o `pse`. `modalidad="pse"` sin credenciales se manda tal cual (el
+  API lo permite sobre un RUC ya en PSE).
+- `entorno="demo"` se acepta (sinónimo de `prueba` en el API); `ENTORNOS`
+  ahora incluye `demo`.
+- La `pse_clave` se tapa (`***`) en las excepciones, igual que la `clave_sol`.
+  El PUT sigue sin reintentarse.
+- Respuestas: `configuracion`/`configurar_sunat` traen `modalidad`, `pse`
+  (`proveedor`, `configurado`, `usuario` enmascarado; `None` si no es PSE) y,
+  en el PUT, `aviso`; `verificar` trae `modalidad` y `checks["pse"]`.
+- `tests/fixtures/openapi.yaml` actualizado a la spec actual.
+
 ## 0.4.0 — 2026-11-10
 
 - Configuración del RUC por API (tag «Configuración del RUC»), en el grupo `rucs`:

@@ -80,7 +80,7 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.rucs.crear(datos)` | `POST /rucs` | dict |
 | `fs.rucs.activar(ruc, activo)` | `PATCH /rucs/{ruc}/activation` | dict |
 | `fs.rucs.subir_certificado(ruc, certificado, clave)` | `PUT /rucs/{ruc}/certificado` | dict (`certificado`: `vence`, `ruc_coincide`…) |
-| `fs.rucs.configurar_sunat(ruc, usuario_sol=None, clave_sol=None, entorno=None)` | `PUT /rucs/{ruc}/sunat` | dict (igual que `configuracion`) |
+| `fs.rucs.configurar_sunat(ruc, usuario_sol=None, clave_sol=None, entorno=None, *, modalidad=None, pse_usuario=None, pse_clave=None)` | `PUT /rucs/{ruc}/sunat` | dict (igual que `configuracion`) |
 | `fs.rucs.verificar(ruc)` | `POST /rucs/{ruc}/verificar` | dict (`listo_para_emitir`, `checks`) |
 | `fs.rucs.configuracion(ruc)` | `GET /rucs/{ruc}/configuracion` | dict (`entorno`, `certificado`, `sol`, `faltantes`…) |
 | `fs.comprobantes.calcular(items, porcentaje_igv=None)` | `POST /calcular` | dict (`success`, `items`, `totales`) |
@@ -209,6 +209,34 @@ print(cfg["entorno"], cfg["listo_para_produccion"], cfg["faltantes"])  # ["certi
   una excepción del SDK (se tapan con `***`). El SDK no escribe logs.
 - `subir_certificado` y `configurar_sunat` nunca se reintentan solas;
   `verificar` y `configuracion` sí (no tienen efectos).
+
+### Enviar por Smart PSE (sin certificado propio)
+
+Primero da de alta la empresa en tu panel/API de Smart PSE; de ahí salen sus
+credenciales CPE (usuario y clave/token).
+
+```python
+r = fs.rucs.configurar_sunat(
+    ruc,
+    modalidad="pse",
+    pse_usuario="FURZQQ7F",      # credenciales CPE de la empresa en Smart PSE
+    pse_clave="379VMR6U",
+    entorno="produccion",
+)
+print(r["modalidad"], r["pse"]["usuario"])  # "pse", "FU*****F"
+print(r["aviso"])  # el contribuyente debe designar a Smart PSE como su PSE en SUNAT con su Clave SOL
+
+v = fs.rucs.verificar(ruc)
+print(v["checks"]["pse"]["ok"], v["checks"]["pse"]["mensaje"])  # token de prueba a Smart PSE, no emite
+```
+
+- `pse_usuario` y `pse_clave` van juntos. Si Smart PSE las rechaza →
+  `ErrorDeValidacion` y no se guarda nada; si no responde, se guardan con un `aviso`.
+- **Sin designar a Smart PSE en SUNAT (Operaciones en Línea, con Clave SOL),
+  SUNAT rechaza los comprobantes.** El usuario SOL es opcional pero recomendado
+  (guías y consultas a SUNAT).
+- Volver a tu certificado: `configurar_sunat(ruc, modalidad="propio")`.
+- La `pse_clave` se tapa (`***`) en las excepciones igual que la `clave_sol`.
 
 ### Lo que `comprobantes.emitir` completa por ti
 

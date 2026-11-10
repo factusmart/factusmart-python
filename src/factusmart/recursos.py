@@ -26,6 +26,7 @@ __all__ = [
     "TIPOS_DE_ARCHIVO",
     "FORMATOS_PDF",
     "ENTORNOS",
+    "MODALIDADES",
 ]
 
 #: Archivos que se pueden descargar de un comprobante.
@@ -50,8 +51,13 @@ def _formato_invalido(mensaje: str) -> Exception:
     )
 
 
-#: Entornos de :meth:`Rucs.configurar_sunat` (``prueba`` = beta de SUNAT).
-ENTORNOS = ("prueba", "produccion")
+#: Entornos de :meth:`Rucs.configurar_sunat` (``prueba`` = beta de SUNAT;
+#: ``demo`` lo acepta el API como sinónimo de ``prueba``).
+ENTORNOS = ("prueba", "produccion", "demo")
+
+#: Modalidades de :meth:`Rucs.configurar_sunat`: ``propio`` = tu certificado,
+#: directo a SUNAT; ``pse`` = Smart PSE firma y envía por ti.
+MODALIDADES = ("propio", "pse")
 
 
 def _dato_invalido(campo: str, mensaje: str) -> Exception:
@@ -370,17 +376,33 @@ class Rucs(_Recurso):
         usuario_sol: Optional[str] = None,
         clave_sol: Optional[str] = None,
         entorno: Optional[str] = None,
+        *,
+        modalidad: Optional[str] = None,
+        pse_usuario: Optional[str] = None,
+        pse_clave: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Guarda el usuario/clave SOL y/o cambia el entorno (``PUT /rucs/{ruc}/sunat``).
+        """Guarda SOL, modalidad (propio / Smart PSE) y/o entorno (``PUT /rucs/{ruc}/sunat``).
 
         Solo se manda lo que pases. ``usuario_sol`` (usuario secundario, con o
         sin el RUC delante) y ``clave_sol`` van juntos. ``entorno``:
-        ``"prueba"`` o ``"produccion"``; para pasar a producción el RUC necesita
-        certificado vigente y SOL (si falta algo: ``ErrorDeValidacion`` con
-        ``e.respuesta["faltantes"]`` y no se guarda nada). No llama a SUNAT:
-        comprueba con :meth:`verificar`. Devuelve lo mismo que
-        :meth:`configuracion`. Nunca se reintenta sola. La ``clave_sol`` nunca
-        aparece en el texto de una excepción del SDK.
+        ``"prueba"`` o ``"produccion"`` (``"demo"`` = ``"prueba"``); para pasar
+        a producción el RUC necesita certificado vigente y SOL (si falta algo:
+        ``ErrorDeValidacion`` con ``e.respuesta["faltantes"]`` y no se guarda
+        nada).
+
+        ``modalidad``: ``"propio"`` (tu certificado, directo a SUNAT) o
+        ``"pse"`` (Smart PSE firma y envía, sin certificado propio). Con
+        ``"pse"`` manda las credenciales CPE de la empresa en Smart PSE:
+        ``pse_usuario`` y ``pse_clave`` (van juntos); el API las prueba pidiendo
+        un token a Smart PSE. La respuesta trae ``modalidad``, ``pse``
+        (``proveedor``, ``configurado``, ``usuario`` enmascarado; ``None`` si no
+        es PSE) y ``aviso`` (p. ej. designar a Smart PSE como tu PSE en SUNAT
+        con la Clave SOL).
+
+        No llama a SUNAT: comprueba con :meth:`verificar`. Devuelve lo mismo que
+        :meth:`configuracion` (+ ``aviso``). Nunca se reintenta sola. La
+        ``clave_sol`` y la ``pse_clave`` nunca aparecen en el texto de una
+        excepción del SDK.
         """
         cuerpo: Dict[str, Any] = {}
         if (usuario_sol is None) != (clave_sol is None):
@@ -388,24 +410,42 @@ class Rucs(_Recurso):
                 "usuario_sol" if usuario_sol is None else "clave_sol",
                 "usuario_sol y clave_sol van juntos: manda los dos.",
             )
+        if (pse_usuario is None) != (pse_clave is None):
+            raise _dato_invalido(
+                "pse_usuario" if pse_usuario is None else "pse_clave",
+                "pse_usuario y pse_clave van juntos: manda los dos.",
+            )
         if usuario_sol is not None:
             cuerpo["usuario_sol"] = str(usuario_sol)
             cuerpo["clave_sol"] = str(clave_sol)
+        if modalidad is not None:
+            if modalidad not in MODALIDADES:
+                raise _dato_invalido("modalidad", "modalidad debe ser uno de: {}.".format(", ".join(MODALIDADES)))
+            cuerpo["modalidad"] = modalidad
+        if pse_usuario is not None:
+            cuerpo["pse_usuario"] = str(pse_usuario)
+            cuerpo["pse_clave"] = str(pse_clave)
         if entorno is not None:
             if entorno not in ENTORNOS:
                 raise _dato_invalido("entorno", "entorno debe ser uno de: {}.".format(", ".join(ENTORNOS)))
             cuerpo["entorno"] = entorno
         if not cuerpo:
-            raise _dato_invalido("entorno", "No hay nada que guardar: pasa usuario_sol y clave_sol, o entorno.")
+            raise _dato_invalido(
+                "entorno",
+                "No hay nada que guardar: pasa usuario_sol y clave_sol, modalidad (con pse_usuario y "
+                "pse_clave si es pse), o entorno.",
+            )
         ruta = "/rucs/{}/sunat".format(self._c._segmento(ruc))
-        with _sin_secretos(cuerpo.get("clave_sol")):
+        with _sin_secretos(cuerpo.get("clave_sol"), cuerpo.get("pse_clave")):
             return self._c._peticion("PUT", ruta, cuerpo=cuerpo)
 
     def verificar(self, ruc: str) -> Dict[str, Any]:
         """Prueba certificado y usuario SOL contra SUNAT sin emitir nada (``POST /rucs/{ruc}/verificar``).
 
-        Trae ``listo_para_emitir``, ``entorno`` y ``checks`` (``certificado`` y
-        ``sol``, cada uno con ``ok`` ``True``/``False``/``None`` y ``mensaje``).
+        Trae ``listo_para_emitir``, ``entorno``, ``modalidad`` y ``checks``
+        (``certificado``, ``sol`` y, con ``modalidad: pse``, ``pse``: token de
+        prueba a Smart PSE; cada uno con ``ok`` ``True``/``False``/``None`` y
+        ``mensaje``).
         ``ok: None`` = no se pudo comprobar o no aplica (en prueba, por OSE/PSE
         o SUNAT sin responder). No tiene efectos: se reintenta como una consulta.
         """
@@ -417,8 +457,10 @@ class Rucs(_Recurso):
 
         Trae ``entorno``, ``certificado`` (``instalado``, ``vence``,
         ``dias_para_vencer``), ``sol`` (``configurado``, ``usuario``
-        enmascarado), ``envio``, ``listo_para_produccion`` y ``faltantes``.
-        Nunca devuelve claves.
+        enmascarado), ``envio``, ``modalidad`` (``propio``/``pse``), ``pse``
+        (``proveedor``, ``configurado``, ``usuario`` enmascarado; ``None`` si no
+        es PSE), ``listo_para_produccion`` y ``faltantes`` (puede incluir
+        ``pse_credenciales``). Nunca devuelve claves.
         """
         return self._c._get("/rucs/{}/configuracion".format(self._c._segmento(ruc)))
 
