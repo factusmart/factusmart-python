@@ -1,5 +1,23 @@
 # Cambios
 
+## 0.4.0 — 2026-11-10
+
+- Configuración del RUC por API (tag «Configuración del RUC»), en el grupo `rucs`:
+  - `subir_certificado(ruc, certificado, clave)` (`PUT /rucs/{ruc}/certificado`):
+    `certificado` es la ruta del .pfx/.p12 (`str` o `Path`) o sus `bytes`; el
+    SDK lo lee y lo manda en base64. Ruta inexistente: `ErrorDeValidacion`
+    sin llamar al API.
+  - `configurar_sunat(ruc, usuario_sol=None, clave_sol=None, entorno=None)`
+    (`PUT /rucs/{ruc}/sunat`): manda solo lo que pases; `entorno` `prueba` o
+    `produccion` (`factusmart.recursos.ENTORNOS`).
+  - `verificar(ruc)` (`POST /rucs/{ruc}/verificar`): prueba certificado y SOL
+    contra SUNAT sin emitir; se reintenta como una consulta.
+  - `configuracion(ruc)` (`GET /rucs/{ruc}/configuracion`).
+- La clave del certificado, la `clave_sol` y el contenido del certificado se
+  tapan (`***`) en el mensaje, `respuesta` y `campos` de cualquier excepción de
+  esas llamadas. `subir_certificado` y `configurar_sunat` nunca se reintentan solas.
+- `tests/fixtures/openapi.yaml` actualizado a la spec actual.
+
 ## 0.3.0 — 2026-11-06
 
 - Nuevo recurso `consultas` (`GET /consultas/{tipo}/{numero}`):

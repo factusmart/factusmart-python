@@ -1,10 +1,13 @@
-"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías, RUCs, anexos, catálogos y consultas RUC/DNI.
+"""Recursos del API: cuenta, series, comprobantes, anulaciones, guías, RUCs (y su configuración SUNAT), anexos, catálogos y consultas RUC/DNI.
 
 Los datos (payload y respuesta) van tal cual los define el API, con las claves
 en español. El SDK no las traduce.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Union
+import base64
+import contextlib
+import os
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Mapping, Optional, Sequence, Union
 
 if TYPE_CHECKING:  # pragma: no cover
     from .cliente import Cliente
@@ -22,6 +25,7 @@ __all__ = [
     "TIPOS_DE_CONSULTA",
     "TIPOS_DE_ARCHIVO",
     "FORMATOS_PDF",
+    "ENTORNOS",
 ]
 
 #: Archivos que se pueden descargar de un comprobante.
@@ -44,6 +48,79 @@ def _formato_invalido(mensaje: str) -> Exception:
         reintentable=False,
         campos={"formato": [mensaje]},
     )
+
+
+#: Entornos de :meth:`Rucs.configurar_sunat` (``prueba`` = beta de SUNAT).
+ENTORNOS = ("prueba", "produccion")
+
+
+def _dato_invalido(campo: str, mensaje: str) -> Exception:
+    from .errores import CodigoDeError, ErrorDeValidacion
+
+    return ErrorDeValidacion(
+        mensaje,
+        status=422,
+        codigo=CodigoDeError.DATOS_INVALIDOS,
+        reintentable=False,
+        campos={campo: [mensaje]},
+    )
+
+
+def _leer_certificado(certificado: Any) -> bytes:
+    """Contenido del .pfx: de ``bytes`` tal cual, o leído de la ruta."""
+    if isinstance(certificado, (bytes, bytearray, memoryview)):
+        contenido = bytes(certificado)
+    elif isinstance(certificado, (str, os.PathLike)):
+        ruta = os.fspath(certificado)
+        if not os.path.isfile(ruta):
+            raise _dato_invalido(
+                "certificado",
+                "No se encontró el archivo del certificado: {!r}. Pasa la ruta a tu .pfx/.p12 "
+                "o su contenido en bytes.".format(ruta),
+            )
+        with open(ruta, "rb") as f:
+            contenido = f.read()
+    else:
+        raise TypeError("certificado debe ser la ruta del .pfx/.p12 (str o Path) o su contenido en bytes.")
+    if not contenido:
+        raise _dato_invalido("certificado", "El certificado está vacío.")
+    return contenido
+
+
+_OCULTO = "***"
+
+
+def _tapar(valor: Any, secretos: Sequence[str]) -> Any:
+    if isinstance(valor, str):
+        for s in secretos:
+            valor = valor.replace(s, _OCULTO)
+        return valor
+    if isinstance(valor, dict):
+        return {_tapar(k, secretos): _tapar(v, secretos) for k, v in valor.items()}
+    if isinstance(valor, (list, tuple)):
+        return type(valor)(_tapar(v, secretos) for v in valor)
+    return valor
+
+
+@contextlib.contextmanager
+def _sin_secretos(*secretos: Optional[str]) -> Iterator[None]:
+    """Si la llamada falla, quita claves y certificado del texto de la excepción.
+
+    El API no devuelve claves, pero un proxy o un error futuro podría hacer eco
+    del cuerpo enviado: esto lo tapa por si acaso. El SDK no usa ``logging``.
+    """
+    from .errores import FactuSmartError
+
+    lista = [s for s in secretos if s and len(s) >= 3]
+    try:
+        yield
+    except FactuSmartError as e:
+        if lista:
+            e.mensaje = _tapar(e.mensaje, lista)
+            e.args = tuple(_tapar(a, lista) for a in e.args)
+            e.respuesta = _tapar(e.respuesta, lista)
+            e.campos = _tapar(e.campos, lista)
+        raise
 
 
 class _Recurso:
@@ -261,6 +338,89 @@ class Rucs(_Recurso):
         """Activa (``True``) o desactiva (``False``) un RUC (``PATCH /rucs/{ruc}/activation``)."""
         ruta = "/rucs/{}/activation".format(self._c._segmento(ruc))
         return self._c._peticion("PATCH", ruta, cuerpo={"activo": bool(activo)})
+
+
+    def subir_certificado(
+        self,
+        ruc: str,
+        certificado: Union[str, "os.PathLike[str]", bytes, bytearray, memoryview],
+        clave: str,
+    ) -> Dict[str, Any]:
+        """Instala el certificado digital .pfx/.p12 del RUC (``PUT /rucs/{ruc}/certificado``).
+
+        ``certificado``: la RUTA del archivo (``str`` o ``pathlib.Path``) o su
+        contenido en ``bytes``. El SDK lo lee y lo manda en base64; tú no
+        codificas nada. ``clave``: la del certificado (no se guarda ni se
+        devuelve). El API comprueba que abra con la clave, que esté vigente y
+        que sea de este RUC; si no, :class:`~factusmart.ErrorDeValidacion`.
+        Con la llave de prueba: ``SIN_PERMISO`` (403). Nunca se reintenta sola.
+
+        La clave y el contenido del certificado nunca aparecen en el texto de
+        una excepción del SDK.
+        """
+        contenido = _leer_certificado(certificado)
+        cuerpo = {"certificado": base64.b64encode(contenido).decode("ascii"), "clave": str(clave)}
+        ruta = "/rucs/{}/certificado".format(self._c._segmento(ruc))
+        with _sin_secretos(str(clave), cuerpo["certificado"]):
+            return self._c._peticion("PUT", ruta, cuerpo=cuerpo)
+
+    def configurar_sunat(
+        self,
+        ruc: str,
+        usuario_sol: Optional[str] = None,
+        clave_sol: Optional[str] = None,
+        entorno: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Guarda el usuario/clave SOL y/o cambia el entorno (``PUT /rucs/{ruc}/sunat``).
+
+        Solo se manda lo que pases. ``usuario_sol`` (usuario secundario, con o
+        sin el RUC delante) y ``clave_sol`` van juntos. ``entorno``:
+        ``"prueba"`` o ``"produccion"``; para pasar a producción el RUC necesita
+        certificado vigente y SOL (si falta algo: ``ErrorDeValidacion`` con
+        ``e.respuesta["faltantes"]`` y no se guarda nada). No llama a SUNAT:
+        comprueba con :meth:`verificar`. Devuelve lo mismo que
+        :meth:`configuracion`. Nunca se reintenta sola. La ``clave_sol`` nunca
+        aparece en el texto de una excepción del SDK.
+        """
+        cuerpo: Dict[str, Any] = {}
+        if (usuario_sol is None) != (clave_sol is None):
+            raise _dato_invalido(
+                "usuario_sol" if usuario_sol is None else "clave_sol",
+                "usuario_sol y clave_sol van juntos: manda los dos.",
+            )
+        if usuario_sol is not None:
+            cuerpo["usuario_sol"] = str(usuario_sol)
+            cuerpo["clave_sol"] = str(clave_sol)
+        if entorno is not None:
+            if entorno not in ENTORNOS:
+                raise _dato_invalido("entorno", "entorno debe ser uno de: {}.".format(", ".join(ENTORNOS)))
+            cuerpo["entorno"] = entorno
+        if not cuerpo:
+            raise _dato_invalido("entorno", "No hay nada que guardar: pasa usuario_sol y clave_sol, o entorno.")
+        ruta = "/rucs/{}/sunat".format(self._c._segmento(ruc))
+        with _sin_secretos(cuerpo.get("clave_sol")):
+            return self._c._peticion("PUT", ruta, cuerpo=cuerpo)
+
+    def verificar(self, ruc: str) -> Dict[str, Any]:
+        """Prueba certificado y usuario SOL contra SUNAT sin emitir nada (``POST /rucs/{ruc}/verificar``).
+
+        Trae ``listo_para_emitir``, ``entorno`` y ``checks`` (``certificado`` y
+        ``sol``, cada uno con ``ok`` ``True``/``False``/``None`` y ``mensaje``).
+        ``ok: None`` = no se pudo comprobar o no aplica (en prueba, por OSE/PSE
+        o SUNAT sin responder). No tiene efectos: se reintenta como una consulta.
+        """
+        ruta = "/rucs/{}/verificar".format(self._c._segmento(ruc))
+        return self._c._peticion("POST", ruta, reintentable=True)
+
+    def configuracion(self, ruc: str) -> Dict[str, Any]:
+        """Configuración SUNAT del RUC sin llamar a SUNAT (``GET /rucs/{ruc}/configuracion``).
+
+        Trae ``entorno``, ``certificado`` (``instalado``, ``vence``,
+        ``dias_para_vencer``), ``sol`` (``configurado``, ``usuario``
+        enmascarado), ``envio``, ``listo_para_produccion`` y ``faltantes``.
+        Nunca devuelve claves.
+        """
+        return self._c._get("/rucs/{}/configuracion".format(self._c._segmento(ruc)))
 
 
 class Establecimientos(_Recurso):

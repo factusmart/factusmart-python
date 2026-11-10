@@ -79,6 +79,10 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.rucs.listar()` | `GET /rucs` | dict |
 | `fs.rucs.crear(datos)` | `POST /rucs` | dict |
 | `fs.rucs.activar(ruc, activo)` | `PATCH /rucs/{ruc}/activation` | dict |
+| `fs.rucs.subir_certificado(ruc, certificado, clave)` | `PUT /rucs/{ruc}/certificado` | dict (`certificado`: `vence`, `ruc_coincide`…) |
+| `fs.rucs.configurar_sunat(ruc, usuario_sol=None, clave_sol=None, entorno=None)` | `PUT /rucs/{ruc}/sunat` | dict (igual que `configuracion`) |
+| `fs.rucs.verificar(ruc)` | `POST /rucs/{ruc}/verificar` | dict (`listo_para_emitir`, `checks`) |
+| `fs.rucs.configuracion(ruc)` | `GET /rucs/{ruc}/configuracion` | dict (`entorno`, `certificado`, `sol`, `faltantes`…) |
 | `fs.comprobantes.calcular(items, porcentaje_igv=None)` | `POST /calcular` | dict (`success`, `items`, `totales`) |
 | `fs.catalogos.listar(ruc=None)` | `GET /catalogos` | dict (`catalogos`, `nota`) |
 | `fs.catalogos.consultar(nombre, q=None, ruc=None)` | `GET /catalogos/{nombre}` | dict (`catalogo`, `total`, `datos`) |
@@ -165,6 +169,46 @@ es idempotente): si falla por red, revisa con `listar()` antes de volver a
 intentarlo. Si el plan del RUC no admite más locales lanza `RucNoAutorizado`
 con `codigo` `LIMITE_ESTABLECIMIENTOS`. Editar o eliminar un local solo se hace
 desde el sistema web.
+
+### Configurar un RUC para emitir (certificado, SOL y producción)
+
+```python
+ruc = "20777666555"
+
+# 1. Certificado digital: pasa la ruta del .pfx/.p12 (o sus bytes). El SDK lo
+#    lee y lo manda en base64; tú no codificas nada.
+r = fs.rucs.subir_certificado(ruc, "C:/certificados/mi_empresa.pfx", clave="ClaveDelPfx")
+print(r["certificado"]["vence"], r["certificado"]["ruc_coincide"])  # None + r["aviso"] si el titular no trae RUC
+
+# 2. Usuario secundario SOL y paso a producción (manda solo lo que pases).
+fs.rucs.configurar_sunat(ruc, usuario_sol="FACTURA1", clave_sol="ClaveSol9")
+fs.rucs.configurar_sunat(ruc, entorno="produccion")   # o "prueba"
+
+# 3. Prueba real contra SUNAT, sin emitir nada.
+v = fs.rucs.verificar(ruc)
+print(v["listo_para_emitir"], v["checks"]["sol"]["ok"], v["checks"]["sol"]["mensaje"])
+
+# Ver cómo está (sin llamar a SUNAT y sin claves):
+cfg = fs.rucs.configuracion(ruc)
+print(cfg["entorno"], cfg["listo_para_produccion"], cfg["faltantes"])  # ["certificado", "sol"]...
+```
+
+- El RUC va en la ruta (no se usa el `ruc` del constructor). No consumen crédito.
+- `subir_certificado`: si la clave no abre el archivo, ya venció o es de otro
+  RUC → `ErrorDeValidacion`. Si la ruta no existe, el SDK lanza
+  `ErrorDeValidacion` (`campos["certificado"]`) sin llamar al API.
+- `configurar_sunat`: `usuario_sol` y `clave_sol` van juntos. Para pasar a
+  `produccion` hace falta certificado vigente y SOL; si falta algo llega
+  `ErrorDeValidacion` con `e.respuesta["faltantes"]` y **no se guarda nada**.
+- `verificar`: cada check trae `ok` `True`/`False`/`None` (`None` = no aplica o
+  SUNAT no respondió; en `prueba` el SOL no se verifica).
+- La llave de **prueba** (`fs_test_…`) puede usar `verificar` y
+  `configuracion`, pero no `subir_certificado` ni `configurar_sunat`
+  (`RucNoAutorizado`, `codigo` `SIN_PERMISO`).
+- Las claves y el contenido del certificado **nunca** aparecen en el texto de
+  una excepción del SDK (se tapan con `***`). El SDK no escribe logs.
+- `subir_certificado` y `configurar_sunat` nunca se reintentan solas;
+  `verificar` y `configuracion` sí (no tienen efectos).
 
 ### Lo que `comprobantes.emitir` completa por ti
 
@@ -369,7 +413,8 @@ except errores.FactuSmartError as e:
   servidor no envía `reintentable`, se aplica la regla por HTTP.
 - `comprobantes.calcular` se reintenta como una consulta GET (no tiene efectos).
 - **Nunca** se reintentan solas: `anulaciones.crear`, `guias.emitir`,
-  `comprobantes.reenviar`, `comprobantes.consultar_sunat` y `rucs.activar`,
+  `comprobantes.reenviar`, `comprobantes.consultar_sunat`, `rucs.activar`,
+  `rucs.subir_certificado` y `rucs.configurar_sunat`,
   **aunque** la respuesta diga `"reintentable": true`. Ahí decides tú (mira
   `e.reintentable`).
 
