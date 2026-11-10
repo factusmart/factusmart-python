@@ -63,6 +63,16 @@ class TestContrato(unittest.TestCase):
         sobran = set(factusmart.OPERACIONES) - ids
         self.assertEqual(sobran, set(), "El SDK mapea operaciones que ya no están en openapi.yaml")
 
+    def test_cada_codigo_de_error_tiene_constante(self) -> None:
+        with open(RUTA_OPENAPI, encoding="utf-8") as f:
+            texto = f.read()
+        m = re.search(r"^    CodigoError:\r?\n(.*?)\r?\n    [A-Za-z]+:\r?\n", texto, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(m, "falta CodigoError en openapi.yaml")
+        valores = re.findall(r"^\s+- ([A-Z_]+)\s*$", m.group(1), re.MULTILINE)
+        self.assertGreater(len(valores), 0)
+        for codigo in valores:
+            self.assertEqual(getattr(factusmart.CodigoDeError, codigo, None), codigo, "Falta CodigoDeError." + codigo)
+
 
 if __name__ == "__main__":
     unittest.main()

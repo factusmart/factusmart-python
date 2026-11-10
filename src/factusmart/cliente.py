@@ -176,8 +176,14 @@ def _prohibe_reintento(cuerpo: Any) -> bool:
 
     Caso real: 429 ``LIMITE_PRUEBAS_DIARIO`` (tope diario de pruebas en RUCs demo,
     se reinicia a medianoche de Lima): repetir no sirve hasta el día siguiente.
+
+    ``LIMITE_VERIFICACIONES`` (429, 10 verificaciones por hora por RUC) tampoco se
+    repite solo aunque diga ``"reintentable": true``: su ``Retry-After`` puede ser
+    de media hora. Se lanza :class:`LimiteDePeticiones` con ``segundos_de_espera``.
     """
-    return isinstance(cuerpo, dict) and cuerpo.get("reintentable") is False
+    return isinstance(cuerpo, dict) and (
+        cuerpo.get("reintentable") is False or cuerpo.get("codigo") == "LIMITE_VERIFICACIONES"
+    )
 
 
 def _error_http(status: int, headers: Mapping[str, str], cuerpo: Any) -> FactuSmartError:

@@ -1,5 +1,26 @@
 # Cambios
 
+## 0.6.0 — 2026-11-10
+
+- `rucs.configurar_sunat` acepta `confirmar` (`bool`, solo por nombre; solo se
+  envía si lo pasas): obligatorio en `True` para pasar a `entorno="prueba"` un
+  RUC que ya emite en producción.
+- `CodigoDeError`: nuevos `LIMITE_VERIFICACIONES` (429, máx. 10 verificaciones
+  por hora por llave y RUC), `CONFIRMAR_CAMBIO_ENTORNO` (422, no reintentable),
+  `PSE_NO_DISPONIBLE` (503, reintentable) y `CATALOGO_NO_DISPONIBLE` (faltaba).
+  `RUC_DESACTIVADO` (403) aplica ahora también a certificado, sunat y verificar.
+- `429 LIMITE_VERIFICACIONES` lanza `LimiteDePeticiones` con
+  `segundos_de_espera` (de `Retry-After`) y **no** se reintenta solo: la espera
+  puede ser de varios minutos.
+- Docstrings y README: los dos caminos para producción (`propio`: certificado +
+  SOL; `pse`: credenciales Smart PSE + SOL, sin certificado), la designación de
+  Smart PSE en SUNAT (que `verificar` no comprueba), el faltante
+  `certificado_otro_ruc`, `sol` también con `pse` en producción y `aviso` en
+  `configuracion`.
+- Contrato: `tests/fixtures/openapi.yaml` actualizado; nueva prueba que exige
+  una constante por cada valor del enum `CodigoError`.
+- `__version__` y el User-Agent: `0.6.0`.
+
 ## 0.5.0 — 2026-11-10
 
 - `rucs.configurar_sunat` acepta `modalidad` (`propio` | `pse`), `pse_usuario`

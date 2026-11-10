@@ -359,7 +359,10 @@ class Rucs(_Recurso):
         codificas nada. ``clave``: la del certificado (no se guarda ni se
         devuelve). El API comprueba que abra con la clave, que esté vigente y
         que sea de este RUC; si no, :class:`~factusmart.ErrorDeValidacion`.
-        Con la llave de prueba: ``SIN_PERMISO`` (403). Nunca se reintenta sola.
+        Con la llave de prueba: ``SIN_PERMISO`` (403); RUC bloqueado o con el
+        plan vencido: ``RUC_DESACTIVADO`` (403). Solo hace falta con
+        ``modalidad="propio"`` (Smart PSE no usa certificado). Nunca se
+        reintenta sola.
 
         La clave y el contenido del certificado nunca aparecen en el texto de
         una excepción del SDK.
@@ -380,6 +383,7 @@ class Rucs(_Recurso):
         modalidad: Optional[str] = None,
         pse_usuario: Optional[str] = None,
         pse_clave: Optional[str] = None,
+        confirmar: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Guarda SOL, modalidad (propio / Smart PSE) y/o entorno (``PUT /rucs/{ruc}/sunat``).
 
@@ -390,14 +394,34 @@ class Rucs(_Recurso):
         ``ErrorDeValidacion`` con ``e.respuesta["faltantes"]`` y no se guarda
         nada).
 
-        ``modalidad``: ``"propio"`` (tu certificado, directo a SUNAT) o
-        ``"pse"`` (Smart PSE firma y envía, sin certificado propio). Con
-        ``"pse"`` manda las credenciales CPE de la empresa en Smart PSE:
-        ``pse_usuario`` y ``pse_clave`` (van juntos); el API las prueba pidiendo
-        un token a Smart PSE. La respuesta trae ``modalidad``, ``pse``
-        (``proveedor``, ``configurado``, ``usuario`` enmascarado; ``None`` si no
-        es PSE) y ``aviso`` (p. ej. designar a Smart PSE como tu PSE en SUNAT
-        con la Clave SOL).
+        ``modalidad`` (Smart PSE es el único PSE):
+
+        - ``"propio"``: tu certificado firma y se envía directo a SUNAT. Para
+          producción: certificado (:meth:`subir_certificado`) + SOL.
+        - ``"pse"``: Smart PSE firma y envía, **sin certificado propio**. Para
+          producción: ``pse_usuario`` + ``pse_clave`` (van juntos; el
+          usuario_secundaria y el token_acceso de la empresa en Smart PSE;
+          obligatorios si el RUC aún no tiene credenciales de Smart PSE) **y
+          también el SOL** (lo usan Consultar CDR y el arreglo del 1033). El
+          API las prueba pidiendo un token a Smart PSE.
+
+        Antes de emitir en producción con ``"pse"``, el contribuyente debe
+        **designar a Smart PSE como su PSE en SUNAT** (Clave SOL → Empresas →
+        PSE); :meth:`verificar` no puede comprobar esa designación. La
+        respuesta trae ``modalidad``, ``pse`` (``proveedor``, ``configurado``,
+        ``usuario`` enmascarado; ``None`` con ``propio``) y ``aviso``.
+
+        ``confirmar``: obligatorio en ``True`` para pasar a ``entorno="prueba"``
+        un RUC que ya emite en producción (los comprobantes de prueba no tienen
+        validez y usan la misma numeración). Sin él: ``ErrorDeValidacion`` con
+        ``codigo`` ``CONFIRMAR_CAMBIO_ENTORNO`` y no se guarda nada. Solo se
+        envía si lo pasas.
+
+        Errores propios: 403 ``RUC_DESACTIVADO`` (RUC bloqueado o plan
+        vencido), 429 ``LIMITE_VERIFICACIONES`` (con ``clave_sol`` o
+        credenciales PSE: más de 10 por hora; mira ``e.segundos_de_espera``),
+        503 ``PSE_NO_DISPONIBLE`` (Smart PSE no respondió con el RUC en
+        producción; no se guardó nada, reintenta luego).
 
         No llama a SUNAT: comprueba con :meth:`verificar`. Devuelve lo mismo que
         :meth:`configuracion` (+ ``aviso``). Nunca se reintenta sola. La
@@ -429,12 +453,16 @@ class Rucs(_Recurso):
             if entorno not in ENTORNOS:
                 raise _dato_invalido("entorno", "entorno debe ser uno de: {}.".format(", ".join(ENTORNOS)))
             cuerpo["entorno"] = entorno
+        if confirmar is not None and not isinstance(confirmar, bool):
+            raise _dato_invalido("confirmar", "confirmar debe ser True o False.")
         if not cuerpo:
             raise _dato_invalido(
                 "entorno",
                 "No hay nada que guardar: pasa usuario_sol y clave_sol, modalidad (con pse_usuario y "
                 "pse_clave si es pse), o entorno.",
             )
+        if confirmar is not None:
+            cuerpo["confirmar"] = confirmar
         ruta = "/rucs/{}/sunat".format(self._c._segmento(ruc))
         with _sin_secretos(cuerpo.get("clave_sol"), cuerpo.get("pse_clave")):
             return self._c._peticion("PUT", ruta, cuerpo=cuerpo)
@@ -446,8 +474,13 @@ class Rucs(_Recurso):
         (``certificado``, ``sol`` y, con ``modalidad: pse``, ``pse``: token de
         prueba a Smart PSE; cada uno con ``ok`` ``True``/``False``/``None`` y
         ``mensaje``).
-        ``ok: None`` = no se pudo comprobar o no aplica (en prueba, por OSE/PSE
-        o SUNAT sin responder). No tiene efectos: se reintenta como una consulta.
+        ``ok: None`` = no se pudo comprobar o no aplica (por OSE/PSE o SUNAT
+        sin responder); la Clave SOL se prueba también en entorno prueba. No
+        puede comprobar si el contribuyente designó a Smart PSE en SUNAT. No
+        tiene efectos: se reintenta como una consulta. Máximo 10 por hora por
+        llave y RUC: 429 ``LIMITE_VERIFICACIONES`` (el SDK no lo repite solo;
+        mira ``e.segundos_de_espera``). 403 ``RUC_DESACTIVADO`` si el RUC está
+        bloqueado o con el plan vencido.
         """
         ruta = "/rucs/{}/verificar".format(self._c._segmento(ruc))
         return self._c._peticion("POST", ruta, reintentable=True)
@@ -459,8 +492,12 @@ class Rucs(_Recurso):
         ``dias_para_vencer``), ``sol`` (``configurado``, ``usuario``
         enmascarado), ``envio``, ``modalidad`` (``propio``/``pse``), ``pse``
         (``proveedor``, ``configurado``, ``usuario`` enmascarado; ``None`` si no
-        es PSE), ``listo_para_produccion`` y ``faltantes`` (puede incluir
-        ``pse_credenciales``). Nunca devuelve claves.
+        es PSE), ``listo_para_produccion``, ``faltantes`` (``certificado``,
+        ``certificado_vencido``, ``certificado_sin_clave_privada``,
+        ``certificado_otro_ruc`` —solo con ``propio``—, ``sol`` —también con
+        ``pse`` en producción— y ``pse_credenciales``) y, si aplica, ``aviso``
+        (designar a Smart PSE en SUNAT, o el certificado vence en menos de 30
+        días). Responde aunque el RUC esté desactivado. Nunca devuelve claves.
         """
         return self._c._get("/rucs/{}/configuracion".format(self._c._segmento(ruc)))
 

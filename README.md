@@ -80,7 +80,7 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.rucs.crear(datos)` | `POST /rucs` | dict |
 | `fs.rucs.activar(ruc, activo)` | `PATCH /rucs/{ruc}/activation` | dict |
 | `fs.rucs.subir_certificado(ruc, certificado, clave)` | `PUT /rucs/{ruc}/certificado` | dict (`certificado`: `vence`, `ruc_coincide`…) |
-| `fs.rucs.configurar_sunat(ruc, usuario_sol=None, clave_sol=None, entorno=None, *, modalidad=None, pse_usuario=None, pse_clave=None)` | `PUT /rucs/{ruc}/sunat` | dict (igual que `configuracion`) |
+| `fs.rucs.configurar_sunat(ruc, usuario_sol=None, clave_sol=None, entorno=None, *, modalidad=None, pse_usuario=None, pse_clave=None, confirmar=None)` | `PUT /rucs/{ruc}/sunat` | dict (igual que `configuracion`) |
 | `fs.rucs.verificar(ruc)` | `POST /rucs/{ruc}/verificar` | dict (`listo_para_emitir`, `checks`) |
 | `fs.rucs.configuracion(ruc)` | `GET /rucs/{ruc}/configuracion` | dict (`entorno`, `certificado`, `sol`, `faltantes`…) |
 | `fs.comprobantes.calcular(items, porcentaje_igv=None)` | `POST /calcular` | dict (`success`, `items`, `totales`) |
@@ -201,7 +201,7 @@ print(cfg["entorno"], cfg["listo_para_produccion"], cfg["faltantes"])  # ["certi
   `produccion` hace falta certificado vigente y SOL; si falta algo llega
   `ErrorDeValidacion` con `e.respuesta["faltantes"]` y **no se guarda nada**.
 - `verificar`: cada check trae `ok` `True`/`False`/`None` (`None` = no aplica o
-  SUNAT no respondió; en `prueba` el SOL no se verifica).
+  SUNAT no respondió). La Clave SOL se prueba también en `prueba` (no emite nada).
 - La llave de **prueba** (`fs_test_…`) puede usar `verificar` y
   `configuracion`, pero no `subir_certificado` ni `configurar_sunat`
   (`RucNoAutorizado`, `codigo` `SIN_PERMISO`).
@@ -210,33 +210,71 @@ print(cfg["entorno"], cfg["listo_para_produccion"], cfg["faltantes"])  # ["certi
 - `subir_certificado` y `configurar_sunat` nunca se reintentan solas;
   `verificar` y `configuracion` sí (no tienen efectos).
 
-### Enviar por Smart PSE (sin certificado propio)
+### Dos caminos para producción: certificado propio o Smart PSE
 
-Primero da de alta la empresa en tu panel/API de Smart PSE; de ahí salen sus
-credenciales CPE (usuario y clave/token).
+Smart PSE es el único PSE.
+
+| `modalidad` | Quién firma | Qué necesitas para `produccion` |
+|---|---|---|
+| `propio` | tu certificado, directo a SUNAT | certificado (`subir_certificado`) + usuario SOL |
+| `pse` | Smart PSE, **sin certificado propio** | `pse_usuario` + `pse_clave` (usuario_secundaria y token_acceso de la empresa en Smart PSE) + usuario SOL |
 
 ```python
 r = fs.rucs.configurar_sunat(
     ruc,
+    "FACTURA1", "ClaveSol9",     # el SOL también hace falta con pse en producción
     modalidad="pse",
-    pse_usuario="FURZQQ7F",      # credenciales CPE de la empresa en Smart PSE
-    pse_clave="379VMR6U",
+    pse_usuario="FURZQQ7F",      # usuario_secundaria de la empresa en Smart PSE
+    pse_clave="379VMR6U",        # token_acceso
     entorno="produccion",
 )
 print(r["modalidad"], r["pse"]["usuario"])  # "pse", "FU*****F"
-print(r["aviso"])  # el contribuyente debe designar a Smart PSE como su PSE en SUNAT con su Clave SOL
+print(r["aviso"])  # recuerda designar a Smart PSE como tu PSE en SUNAT
 
 v = fs.rucs.verificar(ruc)
 print(v["checks"]["pse"]["ok"], v["checks"]["pse"]["mensaje"])  # token de prueba a Smart PSE, no emite
 ```
 
-- `pse_usuario` y `pse_clave` van juntos. Si Smart PSE las rechaza →
-  `ErrorDeValidacion` y no se guarda nada; si no responde, se guardan con un `aviso`.
-- **Sin designar a Smart PSE en SUNAT (Operaciones en Línea, con Clave SOL),
-  SUNAT rechaza los comprobantes.** El usuario SOL es opcional pero recomendado
-  (guías y consultas a SUNAT).
+> **Antes de emitir en producción con Smart PSE**, el contribuyente debe designar
+> a Smart PSE como su PSE en SUNAT (Clave SOL → Empresas → PSE). `verificar`
+> **no** puede comprobar esa designación; sin ella SUNAT rechaza los comprobantes.
+
+- `pse_usuario` y `pse_clave` van juntos y son obligatorios si el RUC aún no
+  tiene credenciales de Smart PSE. Si Smart PSE las rechaza → `ErrorDeValidacion`
+  y no se guarda nada.
+- El SOL es obligatorio con `pse` en producción (lo usan Consultar CDR y el
+  arreglo automático del 1033): si falta, `faltantes` trae `sol`.
 - Volver a tu certificado: `configurar_sunat(ruc, modalidad="propio")`.
 - La `pse_clave` se tapa (`***`) en las excepciones igual que la `clave_sol`.
+
+**Volver de producción a prueba** exige `confirmar=True` (los comprobantes de
+prueba no tienen validez y usan la misma numeración). Sin él:
+`ErrorDeValidacion` con `codigo` `CONFIRMAR_CAMBIO_ENTORNO` y no se guarda nada.
+`confirmar` solo se envía si lo pasas.
+
+```python
+try:
+    fs.rucs.configurar_sunat(ruc, entorno="prueba")
+except factusmart.ErrorDeValidacion as e:
+    if e.codigo == factusmart.CodigoDeError.CONFIRMAR_CAMBIO_ENTORNO:
+        r = fs.rucs.configurar_sunat(ruc, entorno="prueba", confirmar=True)  # trae "aviso"
+```
+
+Errores propios de la configuración del RUC:
+
+| `codigo` | HTTP | Qué hacer |
+|---|---|---|
+| `RUC_DESACTIVADO` | 403 | RUC bloqueado o plan vencido: reactívalo. Aplica a `subir_certificado`, `configurar_sunat` y `verificar` (`configuracion` sigue respondiendo) |
+| `LIMITE_VERIFICACIONES` | 429 | Más de 10 verificaciones por hora para la misma llave y RUC (`verificar`, o `configurar_sunat` con claves). Espera `e.segundos_de_espera` (`Retry-After`); el SDK **no** lo repite solo porque la espera puede ser de varios minutos |
+| `CONFIRMAR_CAMBIO_ENTORNO` | 422 | Repite con `confirmar=True` si de verdad quieres pasar a prueba. No reintentable |
+| `PSE_NO_DISPONIBLE` | 503 | Smart PSE no respondió con el RUC en producción; no se guardó nada. Reintenta más tarde |
+
+`configuracion(ruc)["faltantes"]` puede traer `certificado`,
+`certificado_vencido`, `certificado_sin_clave_privada`, `certificado_otro_ruc`
+(el certificado instalado no es de este RUC; solo con `propio`), `sol` (también
+con `pse` en producción) y `pse_credenciales`. Siempre trae `modalidad` y `pse`
+(`None` con `propio`), y puede traer `aviso` (designar a Smart PSE, o el
+certificado vence en menos de 30 días).
 
 ### Lo que `comprobantes.emitir` completa por ti
 
@@ -390,6 +428,9 @@ Códigos más comunes (lista completa en la documentación del API y en
 | `LIMITE_PRUEBAS_DIARIO` | 429 | **no** | Tope de 200 pruebas/día del RUC demo; se reinicia a medianoche (Lima) |
 | `LIMITE_CONSULTAS` | 429 | **no** | Se acabó el cupo de consultas RUC/DNI; vuelve en `se_renueva` |
 | `CONSULTA_NO_DISPONIBLE` | 503 | sí | SUNAT y el respaldo no respondieron; reintenta |
+| `LIMITE_VERIFICACIONES` | 429 | sí (tú) | Más de 10 verificaciones del RUC por hora; espera `segundos_de_espera` (el SDK no lo repite solo) |
+| `CONFIRMAR_CAMBIO_ENTORNO` | 422 | no | Pasar a prueba un RUC en producción exige `confirmar=True` |
+| `PSE_NO_DISPONIBLE` | 503 | sí | Smart PSE no respondió; no se guardó nada. Reintenta más tarde |
 | `ANULACION_MIXTA` | 422 | no | Anula facturas y boletas en peticiones separadas |
 | `LLAVE_DE_PRUEBA_EN_PRODUCCION` | 403 | no | Usa tu llave de producción con un RUC en producción |
 | `ERROR_INTERNO` | 5xx | sí | Reintenta; si persiste, contacta soporte |
@@ -439,6 +480,9 @@ except errores.FactuSmartError as e:
   sola** petición, con `e.codigo == "LIMITE_PRUEBAS_DIARIO"` y
   `e.reintentable is False`. Decide por `codigo`, no por la clase. Si el
   servidor no envía `reintentable`, se aplica la regla por HTTP.
+- `429 LIMITE_VERIFICACIONES` tampoco se repite solo (aunque diga
+  `"reintentable": true`): su `Retry-After` puede ser de media hora. Se lanza
+  `LimiteDePeticiones` con `e.segundos_de_espera`.
 - `comprobantes.calcular` se reintenta como una consulta GET (no tiene efectos).
 - **Nunca** se reintentan solas: `anulaciones.crear`, `guias.emitir`,
   `comprobantes.reenviar`, `comprobantes.consultar_sunat`, `rucs.activar`,

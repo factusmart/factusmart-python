@@ -377,10 +377,64 @@ class TestVerificarYConfiguracion(unittest.TestCase):
         for op, metodo in esperado.items():
             self.assertEqual(factusmart.OPERACIONES.get(op), metodo)
 
-    def test_user_agent_050(self) -> None:
+    def test_user_agent_060(self) -> None:
         c, t, _ = cliente([(200, CONFIG_OK)])
         c.rucs.configuracion(RUC)
-        self.assertEqual(t.peticiones[0]["headers"]["User-Agent"], "factusmart-python/0.5.0")
+        self.assertEqual(t.peticiones[0]["headers"]["User-Agent"], "factusmart-python/0.6.0")
+        self.assertEqual(factusmart.__version__, "0.6.0")
+
+
+class TestConfirmarYCodigosNuevos(unittest.TestCase):
+    def test_confirmar_solo_se_envia_si_se_pasa(self) -> None:
+        sin_confirmar = {"success": False, "message": "El RUC emite en producción. Repite con confirmar: true.",
+                         "codigo": "CONFIRMAR_CAMBIO_ENTORNO", "reintentable": False}
+        c, t, esperas = cliente([(422, sin_confirmar), (200, dict(CONFIG_OK, aviso="Pasó a prueba."))])
+        with self.assertRaises(factusmart.ErrorDeValidacion) as ctx:
+            c.rucs.configurar_sunat(RUC, entorno="prueba")
+        self.assertEqual(ctx.exception.codigo, factusmart.CodigoDeError.CONFIRMAR_CAMBIO_ENTORNO)
+        self.assertFalse(ctx.exception.reintentable)
+        self.assertEqual(len(t.peticiones), 1)
+        self.assertEqual(t.peticiones[0]["cuerpo"], {"entorno": "prueba"})
+        r = c.rucs.configurar_sunat(RUC, entorno="prueba", confirmar=True)
+        self.assertEqual(t.peticiones[1]["cuerpo"], {"entorno": "prueba", "confirmar": True})
+        self.assertEqual(r["aviso"], "Pasó a prueba.")
+        self.assertEqual(esperas, [])
+
+    def test_confirmar_solo_o_invalido_no_llama(self) -> None:
+        c, t, _ = cliente([])
+        with self.assertRaises(factusmart.ErrorDeValidacion):
+            c.rucs.configurar_sunat(RUC, confirmar=True)
+        with self.assertRaises(factusmart.ErrorDeValidacion) as ctx:
+            c.rucs.configurar_sunat(RUC, entorno="prueba", confirmar="si")  # type: ignore[arg-type]
+        self.assertIn("confirmar", ctx.exception.campos)
+        self.assertEqual(t.peticiones, [])
+
+    def test_limite_verificaciones_no_se_reintenta_y_trae_la_espera(self) -> None:
+        cuerpo = {"success": False, "message": "Hiciste más de 10 verificaciones en una hora para este RUC.",
+                  "retry_after": 1800, "codigo": "LIMITE_VERIFICACIONES", "reintentable": True}
+        c, t, esperas = cliente([(429, cuerpo, {"Retry-After": "1800"}), (200, VERIFICAR_OK)])
+        with self.assertRaises(factusmart.LimiteDePeticiones) as ctx:
+            c.rucs.verificar(RUC)
+        e = ctx.exception
+        self.assertEqual(e.codigo, factusmart.CodigoDeError.LIMITE_VERIFICACIONES)
+        self.assertEqual(e.segundos_de_espera, 1800)
+        self.assertTrue(e.reintentable)
+        self.assertEqual(len(t.peticiones), 1)
+        self.assertEqual(esperas, [])
+
+    def test_pse_no_disponible_y_ruc_desactivado(self) -> None:
+        caido = {"success": False, "message": "Smart PSE no respondió.", "codigo": "PSE_NO_DISPONIBLE", "reintentable": True}
+        bloqueado = {"success": False, "message": "Este RUC está desactivado o su plan venció.",
+                     "codigo": "RUC_DESACTIVADO", "reintentable": False}
+        c, t, _ = cliente([(503, caido), (403, bloqueado)])
+        with self.assertRaises(factusmart.FactuSmartError) as ctx:
+            c.rucs.configurar_sunat(RUC, modalidad="pse", pse_usuario="FURZQQ7F", pse_clave="379VMR6U")
+        self.assertEqual(ctx.exception.codigo, factusmart.CodigoDeError.PSE_NO_DISPONIBLE)
+        self.assertTrue(ctx.exception.reintentable)
+        self.assertEqual(len(t.peticiones), 1)
+        with self.assertRaises(factusmart.RucNoAutorizado) as ctx2:
+            c.rucs.verificar(RUC)
+        self.assertEqual(ctx2.exception.codigo, factusmart.CodigoDeError.RUC_DESACTIVADO)
 
 
 if __name__ == "__main__":

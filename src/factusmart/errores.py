@@ -71,10 +71,20 @@ class CodigoDeError:
     PDF_NO_GENERADO = "PDF_NO_GENERADO"
     #: 403: el plan del RUC no permite más locales (``establecimientos.crear``).
     LIMITE_ESTABLECIMIENTOS = "LIMITE_ESTABLECIMIENTOS"
+    #: El catálogo SUNAT pedido no está disponible (``catalogos``).
+    CATALOGO_NO_DISPONIBLE = "CATALOGO_NO_DISPONIBLE"
     #: 429 no reintentable: se acabó el cupo de consultas RUC/DNI del periodo (``consultas``).
     LIMITE_CONSULTAS = "LIMITE_CONSULTAS"
     #: 503 reintentable: ni SUNAT ni el respaldo respondieron a la consulta RUC/DNI.
     CONSULTA_NO_DISPONIBLE = "CONSULTA_NO_DISPONIBLE"
+    #: 429 en ``rucs.verificar`` y ``rucs.configurar_sunat`` con claves: más de 10 verificaciones por hora
+    #: para la misma llave y RUC. Reintentable tras ``e.segundos_de_espera`` (``Retry-After``), pero el SDK
+    #: no lo repite solo: la espera puede ser de varios minutos.
+    LIMITE_VERIFICACIONES = "LIMITE_VERIFICACIONES"
+    #: 422 no reintentable: pasar a ``prueba`` un RUC en producción exige ``confirmar=True``.
+    CONFIRMAR_CAMBIO_ENTORNO = "CONFIRMAR_CAMBIO_ENTORNO"
+    #: 503 reintentable: Smart PSE no respondió (RUC en producción); no se guardó nada.
+    PSE_NO_DISPONIBLE = "PSE_NO_DISPONIBLE"
 
 
 def _codigo_de(respuesta: Any) -> Optional[str]:
