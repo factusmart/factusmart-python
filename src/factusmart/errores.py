@@ -85,6 +85,9 @@ class CodigoDeError:
     CONFIRMAR_CAMBIO_ENTORNO = "CONFIRMAR_CAMBIO_ENTORNO"
     #: 503 reintentable: Smart PSE no respondió (RUC en producción); no se guardó nada.
     PSE_NO_DISPONIBLE = "PSE_NO_DISPONIBLE"
+    #: 422 no reintentable: la nota de crédito, sumada a las notas vivas del comprobante afectado,
+    #: pasaría su total. El mensaje dice cuánto queda disponible; no se emitió ni se cobró.
+    NOTA_EXCEDE_COMPROBANTE = "NOTA_EXCEDE_COMPROBANTE"
 
 
 def _codigo_de(respuesta: Any) -> Optional[str]:

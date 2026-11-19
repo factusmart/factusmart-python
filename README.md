@@ -77,6 +77,7 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.anulaciones.descargar(ticket, tipo, ruc=None)` | `GET /anulaciones/{ticket}/{xml\|cdr}` (sin PDF) | **bytes** |
 | `fs.guias.emitir(datos, ruc=None)` | `POST /guias` | dict |
 | `fs.guias.estado(external_id, ruc=None)` | `GET /guias/{id}/status` | dict |
+| `fs.guias.reenviar(external_id, ruc=None)` | `POST /guias/{id}/reenviar` | dict |
 | `fs.guias.descargar(external_id, tipo, ruc=None)` | `GET /guias/{id}/{pdf\|xml\|cdr}` | **bytes** |
 | `fs.rucs.listar()` | `GET /rucs` | dict |
 | `fs.rucs.crear(datos)` | `POST /rucs` | dict |
@@ -126,6 +127,25 @@ El CDR solo existe cuando SUNAT ya respondió. Si aún no está (o el id/ticket 
 existe), el API responde 404 y el SDK lanza `NoEncontrado` (`codigo`
 `NO_ENCONTRADO`): consulta `guias.estado` / `anulaciones.estado` y vuelve a
 intentar. Un `tipo` fuera de la lista lanza `ValueError` sin llamar al API.
+
+### Reenviar una guía que quedó en 01 (Registrado)
+
+Si `guias.emitir` respondió `enviado: false` (por ejemplo, credenciales GRE mal
+configuradas), corrige la causa y reintenta el envío a SUNAT. Cobra 1 crédito
+solo si el envío sale bien.
+
+```python
+try:
+    r = fs.guias.reenviar(guia_id)   # enviado, estado, mensaje, links, envio y el crédito
+except factusmart.ErrorDeValidacion as e:
+    if e.codigo == factusmart.CodigoDeError.REENVIO_FALLIDO:
+        print(e.mensaje, e.respuesta.get("estado"))  # no se cobró
+```
+
+`REENVIO_FALLIDO` (422) llega cuando el envío falla (no se cobra, trae
+`reintentable: true`) o cuando la guía no está en `01` (trae `estado`). Si no
+existe: `NoEncontrado`. El SDK **no** lo repite solo; luego consulta
+`guias.estado`.
 
 ### PDF en ticket u otro tamaño
 
@@ -453,6 +473,8 @@ Códigos más comunes (lista completa en la documentación del API y en
 | `CONFIRMAR_CAMBIO_ENTORNO` | 422 | no | Pasar a prueba un RUC en producción exige `confirmar=True` |
 | `PSE_NO_DISPONIBLE` | 503 | sí | Smart PSE no respondió; no se guardó nada. Reintenta más tarde |
 | `ANULACION_MIXTA` | 422 | no | Anula facturas y boletas en peticiones separadas |
+| `NOTA_EXCEDE_COMPROBANTE` | 422 | no | La nota de crédito, sumada a las notas vivas del comprobante afectado, pasaría su total. El mensaje dice cuánto queda; no se emitió ni se cobró |
+| `REENVIO_FALLIDO` | 422 | según `reintentable` | `comprobantes.reenviar` / `guias.reenviar` no se completó (no se cobró). Revisa `message` |
 | `LLAVE_DE_PRUEBA_EN_PRODUCCION` | 403 | no | Usa tu llave de producción con un RUC en producción |
 | `ERROR_INTERNO` | 5xx | sí | Reintenta; si persiste, contacta soporte |
 
@@ -506,7 +528,7 @@ except errores.FactuSmartError as e:
   `LimiteDePeticiones` con `e.segundos_de_espera`.
 - `comprobantes.calcular` se reintenta como una consulta GET (no tiene efectos).
 - **Nunca** se reintentan solas: `anulaciones.crear`, `guias.emitir`,
-  `comprobantes.reenviar`, `comprobantes.consultar_sunat`, `rucs.activar`,
+  `comprobantes.reenviar`, `guias.reenviar`, `comprobantes.consultar_sunat`, `rucs.activar`,
   `rucs.subir_certificado` y `rucs.configurar_sunat`,
   **aunque** la respuesta diga `"reintentable": true`. Ahí decides tú (mira
   `e.reintentable`).

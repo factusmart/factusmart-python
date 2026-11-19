@@ -1,5 +1,24 @@
 # Cambios
 
+## 0.8.0 — 2026-11-19
+
+- Nuevo `guias.reenviar(external_id, ruc=None)`: reintenta enviar a SUNAT una
+  guía que quedó en `01` (Registrado) (`POST /guias/{external_id}/reenviar`).
+  Cobra 1 crédito solo si el envío sale bien. Nunca se reintenta solo.
+  `422 REENVIO_FALLIDO` → `ErrorDeValidacion` (envío fallido, no se cobra; o la
+  guía no está en `01`, con `estado`); `404` → `NoEncontrado`.
+
+  ```python
+  r = fs.guias.reenviar(guia_id)
+  print(r["enviado"], r["estado"], r["links"]["pdf"])
+  ```
+- Nuevo código `CodigoDeError.NOTA_EXCEDE_COMPROBANTE` (422, no reintentable):
+  la nota de crédito, sumada a las notas vivas del comprobante afectado,
+  pasaría su total.
+- `OPERACIONES`: `resendDispatchGuide`. Contrato: `tests/fixtures/openapi.yaml`
+  actualizado.
+- `__version__` y el User-Agent: `0.8.0`.
+
 ## 0.7.0 — 2026-11-18
 
 - Nuevo `guias.descargar(external_id, tipo, ruc=None)`: PDF (A4), XML firmado o

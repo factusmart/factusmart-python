@@ -352,6 +352,20 @@ class Guias(_Recurso):
         ruta = "/guias/{}/status".format(self._c._segmento(external_id))
         return self._c._get(ruta, ruc=self._c._ruc(ruc))
 
+    def reenviar(self, external_id: str, ruc: Optional[str] = None) -> Dict[str, Any]:
+        """Reintenta enviar a SUNAT una guía que quedó en ``01`` (Registrado) (``POST /guias/{external_id}/reenviar``).
+
+        Nunca se reintenta solo. Cobra 1 crédito solo si el envío sale bien. La
+        respuesta trae ``serie_numero``, ``external_id``, ``enviado``, ``estado``,
+        ``mensaje``, ``links: {xml, pdf, cdr}``, ``envio`` y el resumen del
+        crédito. Si el envío falla (no se cobra) o la guía no está en ``01``
+        (trae ``estado``): :class:`~factusmart.ErrorDeValidacion` con ``codigo``
+        ``REENVIO_FALLIDO``. Si no existe: :class:`~factusmart.NoEncontrado`.
+        Luego consulta :meth:`estado`.
+        """
+        ruta = "/guias/{}/reenviar".format(self._c._segmento(external_id))
+        return self._c._peticion("POST", ruta, cuerpo=self._c._cuerpo_con_ruc(None, ruc))
+
     def descargar(self, external_id: str, tipo: str, ruc: Optional[str] = None) -> bytes:
         """Descarga el ``pdf`` (A4), ``xml`` firmado o ``cdr`` de la guía. Devuelve ``bytes``.
 
