@@ -24,6 +24,8 @@ __all__ = [
     "Consultas",
     "TIPOS_DE_CONSULTA",
     "TIPOS_DE_ARCHIVO",
+    "TIPOS_DE_ARCHIVO_GUIA",
+    "TIPOS_DE_ARCHIVO_ANULACION",
     "FORMATOS_PDF",
     "ENTORNOS",
     "MODALIDADES",
@@ -31,6 +33,12 @@ __all__ = [
 
 #: Archivos que se pueden descargar de un comprobante.
 TIPOS_DE_ARCHIVO = ("pdf", "xml", "cdr")
+
+#: Archivos que se pueden descargar de una guía de remisión.
+TIPOS_DE_ARCHIVO_GUIA = ("pdf", "xml", "cdr")
+
+#: Archivos que se pueden descargar de una anulación (sin PDF).
+TIPOS_DE_ARCHIVO_ANULACION = ("xml", "cdr")
 
 #: Documentos que se pueden consultar con :meth:`Consultas.documento`.
 TIPOS_DE_CONSULTA = ("ruc", "dni")
@@ -197,7 +205,12 @@ class Comprobantes(_Recurso):
         return self._c._get("/documents", ruc=self._c._ruc(ruc), query=filtros)
 
     def consultar(self, external_id: str, ruc: Optional[str] = None) -> Dict[str, Any]:
-        """Estado guardado del comprobante y sus links (``GET /documents/{external_id}``)."""
+        """Estado guardado del comprobante y sus ``links`` (``GET /documents/{external_id}``).
+
+        Toda respuesta con un comprobante (``emitir``, ``listar``, ``consultar``,
+        ``reenviar``, ``consultar_sunat``, ``historial``) trae
+        ``links: {pdf, pdf_ticket, xml, cdr}``.
+        """
         return self._c._get("/documents/" + self._c._segmento(external_id), ruc=self._c._ruc(ruc))
 
     def descargar(
@@ -287,16 +300,31 @@ class Anulaciones(_Recurso):
         crédito salvo en demo.
 
         ``fecha_de_emision_de_documentos`` va en formato DD-MM-AAAA.
+        También trae ``links: {xml, cdr}`` (bájalos con :meth:`descargar`).
         """
         return self._c._peticion("POST", "/anulaciones", cuerpo=self._c._cuerpo_con_ruc(datos, ruc))
 
     def estado(self, ticket: str, ruc: Optional[str] = None) -> Dict[str, Any]:
         """Resultado de la anulación en SUNAT (``GET /anulaciones/{ticket}/status``).
 
-        Trae también ``tipo`` (``baja`` | ``resumen``) y ``documentos``.
+        Trae también ``tipo`` (``baja`` | ``resumen``), ``documentos`` y
+        ``links: {xml, cdr}``.
         """
         ruta = "/anulaciones/{}/status".format(self._c._segmento(ticket))
         return self._c._get(ruta, ruc=self._c._ruc(ruc))
+
+    def descargar(self, ticket: str, tipo: str, ruc: Optional[str] = None) -> bytes:
+        """Descarga el ``xml`` enviado o el ``cdr`` (ZIP de SUNAT) de la anulación. Devuelve ``bytes``.
+
+        ``GET /anulaciones/{ticket}/{xml|cdr}``. No hay PDF. El CDR existe
+        cuando SUNAT ya respondió (mira :meth:`estado`); si aún no, el API
+        responde 404 → :class:`~factusmart.NoEncontrado`.
+        """
+        tipo = str(tipo).lower()
+        if tipo not in TIPOS_DE_ARCHIVO_ANULACION:
+            raise ValueError("tipo debe ser 'xml' o 'cdr' (recibido: {!r}).".format(tipo))
+        ruta = "/anulaciones/{}/{}".format(self._c._segmento(ticket), tipo)
+        return self._c._get(ruta, ruc=self._c._ruc(ruc), binario=True)
 
 
 class Guias(_Recurso):
@@ -304,7 +332,8 @@ class Guias(_Recurso):
         """Emite una guía de remisión GRE 2.0 (``POST /guias``). No usa Idempotency-Key: nunca se reintenta sola.
 
         Completa si faltan ``numero_documento`` (``"#"``), ``fecha_de_emision`` y
-        ``hora_de_emision`` (hora de Perú).
+        ``hora_de_emision`` (hora de Perú). La respuesta trae, dentro de
+        ``envio``, ``links: {xml, pdf, cdr}``.
         """
         from .cliente import hora_peru
 
@@ -319,9 +348,23 @@ class Guias(_Recurso):
         return self._c._peticion("POST", "/guias", cuerpo=cuerpo)
 
     def estado(self, external_id: str, ruc: Optional[str] = None) -> Dict[str, Any]:
-        """Estado de la guía en SUNAT (``GET /guias/{external_id}/status``)."""
+        """Estado de la guía en SUNAT (``GET /guias/{external_id}/status``), con ``links: {xml, pdf, cdr}``."""
         ruta = "/guias/{}/status".format(self._c._segmento(external_id))
         return self._c._get(ruta, ruc=self._c._ruc(ruc))
+
+    def descargar(self, external_id: str, tipo: str, ruc: Optional[str] = None) -> bytes:
+        """Descarga el ``pdf`` (A4), ``xml`` firmado o ``cdr`` de la guía. Devuelve ``bytes``.
+
+        ``GET /guias/{external_id}/{pdf|xml|cdr}``. El PDF y el XML existen
+        desde que la guía se genera; el CDR solo cuando SUNAT la aceptó (si
+        falta, el API responde 404 → :class:`~factusmart.NoEncontrado`:
+        consulta :meth:`estado` y vuelve a intentar).
+        """
+        tipo = str(tipo).lower()
+        if tipo not in TIPOS_DE_ARCHIVO_GUIA:
+            raise ValueError("tipo debe ser 'pdf', 'xml' o 'cdr' (recibido: {!r}).".format(tipo))
+        ruta = "/guias/{}/{}".format(self._c._segmento(external_id), tipo)
+        return self._c._get(ruta, ruc=self._c._ruc(ruc), binario=True)
 
 
 class Rucs(_Recurso):

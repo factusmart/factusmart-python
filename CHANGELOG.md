@@ -1,5 +1,22 @@
 # Cambios
 
+## 0.7.0 — 2026-11-18
+
+- Nuevo `guias.descargar(external_id, tipo, ruc=None)`: PDF (A4), XML firmado o
+  CDR de una guía de remisión (`GET /guias/{external_id}/{pdf|xml|cdr}`).
+  Devuelve `bytes`.
+- Nuevo `anulaciones.descargar(ticket, tipo, ruc=None)`: XML enviado o CDR (ZIP)
+  de la comunicación de baja o del resumen (`GET /anulaciones/{ticket}/{xml|cdr}`).
+  Sin PDF. Devuelve `bytes`.
+- Las dos: 404 (no existe o el CDR aún no llega) → `NoEncontrado`; `tipo` fuera
+  de la lista → `ValueError` sin llamar al API. Nuevas constantes
+  `factusmart.recursos.TIPOS_DE_ARCHIVO_GUIA` y `TIPOS_DE_ARCHIVO_ANULACION`.
+- Docstrings y README: las respuestas traen `links` (comprobantes:
+  `pdf, pdf_ticket, xml, cdr`; guías: `xml, pdf, cdr`; anulaciones: `xml, cdr`).
+- `OPERACIONES`: `downloadDispatchGuideFile` y `downloadVoidedFile`.
+  Contrato: `tests/fixtures/openapi.yaml` actualizado.
+- `__version__` y el User-Agent: `0.7.0`.
+
 ## 0.6.0 — 2026-11-10
 
 - `rucs.configurar_sunat` acepta `confirmar` (`bool`, solo por nombre; solo se

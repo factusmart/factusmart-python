@@ -74,8 +74,10 @@ cuerpo, y si tú ya pusiste `ruc` en los datos, se respeta el tuyo).
 | `fs.comprobantes.historial(external_id, ruc=None)` | `GET /documents/{id}/historial` | dict |
 | `fs.anulaciones.crear(datos, ruc=None)` | `POST /anulaciones` | dict |
 | `fs.anulaciones.estado(ticket, ruc=None)` | `GET /anulaciones/{ticket}/status` | dict |
+| `fs.anulaciones.descargar(ticket, tipo, ruc=None)` | `GET /anulaciones/{ticket}/{xml\|cdr}` (sin PDF) | **bytes** |
 | `fs.guias.emitir(datos, ruc=None)` | `POST /guias` | dict |
 | `fs.guias.estado(external_id, ruc=None)` | `GET /guias/{id}/status` | dict |
+| `fs.guias.descargar(external_id, tipo, ruc=None)` | `GET /guias/{id}/{pdf\|xml\|cdr}` | **bytes** |
 | `fs.rucs.listar()` | `GET /rucs` | dict |
 | `fs.rucs.crear(datos)` | `POST /rucs` | dict |
 | `fs.rucs.activar(ruc, activo)` | `PATCH /rucs/{ruc}/activation` | dict |
@@ -105,6 +107,25 @@ Guardar el PDF:
 with open("comprobante.pdf", "wb") as f:
     f.write(fs.comprobantes.descargar(r["external_id"], "pdf"))
 ```
+
+Toda respuesta que trae un comprobante (`emitir`, `listar`, `consultar`,
+`reenviar`, `consultar_sunat`, `historial`) incluye
+`links: {pdf, pdf_ticket, xml, cdr}`. `guias.emitir` (dentro de `envio`) y
+`guias.estado` traen `links: {xml, pdf, cdr}`; `anulaciones.crear` y
+`anulaciones.estado`, `links: {xml, cdr}`. Son URLs del API: para bajarlas con
+tu llave usa los métodos `descargar`.
+
+### Descargar archivos de guías y anulaciones
+
+```python
+pdf = fs.guias.descargar(guia_id, "pdf")        # también "xml" (firmado) o "cdr"
+xml = fs.anulaciones.descargar(ticket, "xml")   # o "cdr" (ZIP de SUNAT); no hay PDF
+```
+
+El CDR solo existe cuando SUNAT ya respondió. Si aún no está (o el id/ticket no
+existe), el API responde 404 y el SDK lanza `NoEncontrado` (`codigo`
+`NO_ENCONTRADO`): consulta `guias.estado` / `anulaciones.estado` y vuelve a
+intentar. Un `tipo` fuera de la lista lanza `ValueError` sin llamar al API.
 
 ### PDF en ticket u otro tamaño
 
