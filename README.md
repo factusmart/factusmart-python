@@ -20,7 +20,7 @@ pip install factusmart
 ```python
 import factusmart
 
-fs = factusmart.Cliente(api_key="TU_API_KEY", base_url="https://TU_URL_BASE/api/v1/issuer", ruc="20100070970")
+fs = factusmart.Cliente(api_key="fs_live_...", ruc="20100070970")
 
 calc = factusmart.calcular_comprobante([
     {"descripcion": "Servicio de consultoría", "cantidad": 1, "valor_unitario": 100, "afectacion": "10"},
@@ -35,22 +35,26 @@ r = fs.comprobantes.emitir({
 print(r["aceptado_por_sunat"], r["serie_numero"])
 ```
 
-`base_url` **no es igual para todas las cuentas**: cada cuenta vive en un
-servidor distinto. Cópiala de tu panel de integrador (pestaña Configuración,
-"URL base de la API").
+Con una llave de formato nuevo (`fs_live_…` / `fs_test_…`) no hace falta
+`base_url`: el cliente usa `https://app.factusmart.pe/api/v1/issuer`.
+
+> **¿Llave del formato anterior?** Pasa `base_url` con la "URL base de la API"
+> de tu panel de integrador (pestaña Configuración), o pide tu llave nueva en el
+> panel y ya no la necesitarás.
 
 ## Opciones del cliente
 
 | Opción | Obligatoria | Por defecto | Para qué |
 |---|---|---|---|
 | `api_key` | sí | — | Tu API key (va en el header `X-API-Key`) |
-| `base_url` | sí | — | URL base de tu cuenta, sin barra final |
+| `base_url` | no | `https://app.factusmart.pe/api/v1/issuer` | Obligatoria solo con llaves del formato anterior. Si la pasas, se usa tal cual (sin barra final) |
 | `ruc` | no | — | RUC emisor por defecto. Se cambia en cada llamada con `ruc=` |
 | `timeout` | no | `60` | Segundos por petición (SUNAT a veces tarda) |
 | `max_reintentos` | no | `3` | Ver "Reintentos e idempotencia" |
 | `verificar_ssl` | no | `True` | `False` **solo** en pruebas locales con certificado propio |
 
-Si falta `api_key` o `base_url`, el cliente lanza `ValueError` al crearse.
+Si falta `api_key`, o falta `base_url` con una llave del formato anterior, el
+cliente lanza `ValueError` al crearse.
 
 ## Métodos
 

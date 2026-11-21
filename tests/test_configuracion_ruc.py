@@ -380,8 +380,8 @@ class TestVerificarYConfiguracion(unittest.TestCase):
     def test_user_agent_060(self) -> None:
         c, t, _ = cliente([(200, CONFIG_OK)])
         c.rucs.configuracion(RUC)
-        self.assertEqual(t.peticiones[0]["headers"]["User-Agent"], "factusmart-python/0.8.0")
-        self.assertEqual(factusmart.__version__, "0.8.0")
+        self.assertEqual(t.peticiones[0]["headers"]["User-Agent"], "factusmart-python/0.9.0")
+        self.assertEqual(factusmart.__version__, "0.9.0")
 
 
 class TestConfirmarYCodigosNuevos(unittest.TestCase):

@@ -4,7 +4,7 @@ Uso::
 
     import factusmart
 
-    fs = factusmart.Cliente(api_key="TU_API_KEY", base_url="https://TU_URL_BASE/api/v1/issuer", ruc="20100070970")
+    fs = factusmart.Cliente(api_key="fs_live_...", ruc="20100070970")
     calc = factusmart.calcular_comprobante([
         {"descripcion": "Servicio de consultoría", "cantidad": 1, "valor_unitario": 100, "afectacion": "10"},
     ])
@@ -24,7 +24,7 @@ Webhooks::
 from . import errores
 from ._version import __version__
 from .calculo import calcular_comprobante
-from .cliente import OPERACIONES, Cliente, Transporte, hora_peru
+from .cliente import OPERACIONES, URL_BASE_PREDETERMINADA, Cliente, Transporte, es_llave_nueva, hora_peru
 from .errores import (
     CodigoDeError,
     ErrorDeAutenticacion,
@@ -42,6 +42,8 @@ __all__ = [
     "Cliente",
     "Transporte",
     "OPERACIONES",
+    "URL_BASE_PREDETERMINADA",
+    "es_llave_nueva",
     "calcular_comprobante",
     "hora_peru",
     "verificar_firma_webhook",

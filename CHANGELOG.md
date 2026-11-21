@@ -1,5 +1,21 @@
 # Cambios
 
+## 0.9.0 — 2026-11-21
+
+- `base_url` ahora es **opcional**. Con una llave de formato nuevo
+  (`fs_live_…` / `fs_test_…` con la cuenta) y sin `base_url`, el cliente usa
+  `https://app.factusmart.pe/api/v1/issuer`:
+
+  ```python
+  fs = factusmart.Cliente(api_key="fs_live_...", ruc="20100070970")
+  ```
+- Con una llave del formato anterior `base_url` sigue siendo obligatoria
+  (`ValueError` con un mensaje nuevo que explica cómo pedir la llave nueva).
+  Si pasas `base_url`, se respeta tal cual, como antes.
+- Nuevos `URL_BASE_PREDETERMINADA` y `es_llave_nueva(api_key)`.
+- Ejemplos y mensajes: `https://app.factusmart.pe/api/v1/issuer`.
+- `__version__` y el User-Agent: `0.9.0`.
+
 ## 0.8.0 — 2026-11-19
 
 - Nuevo `guias.reenviar(external_id, ruc=None)`: reintenta enviar a SUNAT una

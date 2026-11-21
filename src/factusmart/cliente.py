@@ -203,15 +203,33 @@ def _error_http(status: int, headers: Mapping[str, str], cuerpo: Any) -> FactuSm
     return clase(mensaje, status, cuerpo)
 
 
+URL_BASE_PREDETERMINADA = "https://app.factusmart.pe/api/v1/issuer"
+"""URL base que se usa cuando no pasas ``base_url`` y tu llave es de formato nuevo."""
+
+_LLAVE_NUEVA = re.compile(r"^fs_(live|test)_A[0-9A-HJKMNP-TV-Z]{11}_[A-Za-z0-9]{32,128}$")
+
+
+def es_llave_nueva(api_key: str) -> bool:
+    """``True`` si la llave es de formato nuevo (``fs_live_A…_…`` / ``fs_test_A…_…``).
+
+    Esas llaves se atienden en :data:`URL_BASE_PREDETERMINADA`; las del formato
+    anterior solo en la URL de su servidor (la que muestra su panel).
+    """
+    return bool(_LLAVE_NUEVA.fullmatch(api_key))
+
+
 class Cliente:
     """Cliente del API de facturación electrónica de FactuSmart.
 
-    >>> fs = Cliente(api_key="TU_API_KEY", base_url="https://TU_URL_BASE/api/v1/issuer", ruc="20100070970")
+    >>> fs = Cliente(api_key="fs_live_...", ruc="20100070970")
     >>> fs.ping()["success"]
     True
 
     :param api_key: tu API key (va en el header ``X-API-Key``).
-    :param base_url: URL base de tu cuenta (cada cuenta vive en un servidor distinto).
+    :param base_url: URL base del API. Opcional con una llave de formato nuevo
+        (``fs_live_…`` / ``fs_test_…``): se usa :data:`URL_BASE_PREDETERMINADA`.
+        Con una llave del formato anterior es obligatoria: la "URL base de la API"
+        de tu panel de integrador. Si la pasas, se usa tal cual.
     :param ruc: RUC emisor por defecto. Se puede cambiar en cada llamada con ``ruc=``.
     :param timeout: segundos de espera por petición (SUNAT a veces tarda).
     :param max_reintentos: reintentos ante error de red, 429, 502, 503, 504 o una
@@ -225,7 +243,7 @@ class Cliente:
     def __init__(
         self,
         api_key: str,
-        base_url: str,
+        base_url: Optional[str] = None,
         ruc: Optional[str] = None,
         timeout: float = 60,
         max_reintentos: int = 3,
@@ -236,10 +254,13 @@ class Cliente:
         if not api_key or not str(api_key).strip():
             raise ValueError("Falta api_key: es tu API key de FactuSmart (panel de integrador, pestaña Configuración).")
         if not base_url or not str(base_url).strip():
-            raise ValueError(
-                "Falta base_url: es la URL base de tu cuenta, por ejemplo "
-                "https://s2.factusmart.pe/api/v1/issuer (aparece en tu panel de integrador)."
-            )
+            if not es_llave_nueva(str(api_key).strip()):
+                raise ValueError(
+                    "Falta base_url: tu llave es del formato anterior; copia la \"URL base de la API\" "
+                    "de tu panel de integrador, o pide tu llave nueva (fs_live_…) en el panel y no "
+                    "necesitarás base_url."
+                )
+            base_url = URL_BASE_PREDETERMINADA
         if max_reintentos < 0:
             raise ValueError("max_reintentos no puede ser negativo.")
         self.api_key: str = str(api_key).strip()
